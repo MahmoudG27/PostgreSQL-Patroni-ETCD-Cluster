@@ -5,13 +5,13 @@ This guide describes how to prepare the VMs and configure a **5-node etcd cluste
 > **Important:**
 > The configuration below assumes that there are **5 VMs** with the following hostnames and IP addresses:
 >
-> | Node   | Hostname   | IP Address |
-> | ------ | ---------- | ---------- |
-> | Node 1 | `pg-node1` | `10.1.0.4` |
-> | Node 2 | `pg-node2` | `10.1.0.5` |
-> | Node 3 | `pg-node3` | `10.1.0.6` |
-> | Node 4 | `pg-node4` | `10.1.0.7` |
-> | Node 5 | `pg-node5` | `10.1.0.8` |
+> | Node   | Hostname     | IP Address |
+> | ------ | ------------ | ---------- |
+> | Node 1 | `hq-node-01` | `10.0.0.4` |
+> | Node 2 | `hq-node-02` | `10.0.0.5` |
+> | Node 3 | `hq-node-03` | `10.0.0.6` |
+> | Node 4 | `hq-node-04` | `10.0.0.7` |
+> | Node 5 | `hq-node-05` | `10.0.0.8` |
 
 ---
 
@@ -41,22 +41,22 @@ Each VM needs to be able to resolve the other nodes by hostname.
 Add the following entries to `/etc/hosts` on **all VMs**:
 
 ```text
-10.1.0.4 pg-node1
-10.1.0.5 pg-node2
-10.1.0.6 pg-node3
-10.1.0.7 pg-node4
-10.1.0.8 pg-node5
+10.0.0.4 hq-node-01
+10.0.0.5 hq-node-02
+10.0.0.6 hq-node-03
+10.0.0.7 hq-node-04
+10.0.0.8 hq-node-05
 ```
 
 You can add them using:
 
 ```bash
 sudo tee -a /etc/hosts <<EOF
-10.1.0.4 pg-node1
-10.1.0.5 pg-node2
-10.1.0.6 pg-node3
-10.1.0.7 pg-node4
-10.1.0.8 pg-node5
+10.0.0.4 hq-node-01
+10.0.0.5 hq-node-02
+10.0.0.6 hq-node-03
+10.0.0.7 hq-node-04
+10.0.0.8 hq-node-05
 EOF
 ```
 
@@ -65,11 +65,11 @@ EOF
 Run:
 
 ```bash
-getent hosts pg-node1
-getent hosts pg-node2
-getent hosts pg-node3
-getent hosts pg-node4
-getent hosts pg-node5
+getent hosts hq-node-01
+getent hosts hq-node-02
+getent hosts hq-node-03
+getent hosts hq-node-04
+getent hosts hq-node-05
 ```
 
 You should see the corresponding IP address for each hostname.
@@ -141,11 +141,11 @@ The etcd configuration file will be:
 The cluster contains **5 etcd members**:
 
 ```text
-pg-node1 = 10.1.0.4
-pg-node2 = 10.1.0.5
-pg-node3 = 10.1.0.6
-pg-node4 = 10.1.0.7
-pg-node5 = 10.1.0.8
+hq-node-01 = 10.0.0.4
+hq-node-02 = 10.0.0.5
+hq-node-03 = 10.0.0.6
+hq-node-04 = 10.0.0.7
+hq-node-05 = 10.0.0.8
 ```
 
 ## Important Configuration Rules
@@ -157,11 +157,11 @@ The `initial-cluster` value must be **exactly the same on all five VMs**.
 It defines all members that belong to the cluster:
 
 ```text
-pg-node1=http://10.1.0.4:2380
-pg-node2=http://10.1.0.5:2380
-pg-node3=http://10.1.0.6:2380
-pg-node4=http://10.1.0.7:2380
-pg-node5=http://10.1.0.8:2380
+hq-node-01=http://10.0.0.4:2380
+hq-node-02=http://10.0.0.5:2380
+hq-node-03=http://10.0.0.6:2380
+hq-node-04=http://10.0.0.7:2380
+hq-node-05=http://10.0.0.8:2380
 ```
 
 ### Node-specific values
@@ -178,24 +178,24 @@ The following values must be changed according to the VM:
 
 # 6. Node 1 Configuration
 
-On **`pg-node1` (`10.1.0.4`)**, create:
+On **`hq-node-01` (`10.0.0.4`)**, create:
 
 ```text
 /etc/etcd/etcd.conf.yml
 ```
 
 ```yaml
-name: pg-node1
+name: hq-node-01
 
 data-dir: /var/lib/etcd
 
-initial-advertise-peer-urls: http://10.1.0.4:2380
-listen-peer-urls: http://10.1.0.4:2380
+initial-advertise-peer-urls: http://10.0.0.4:2380
+listen-peer-urls: http://10.0.0.4:2380
 
-listen-client-urls: http://10.1.0.4:2379,http://127.0.0.1:2379
-advertise-client-urls: http://10.1.0.4:2379
+listen-client-urls: http://10.0.0.4:2379,http://127.0.0.1:2379
+advertise-client-urls: http://10.0.0.4:2379
 
-initial-cluster: pg-node1=http://10.1.0.4:2380,pg-node2=http://10.1.0.5:2380,pg-node3=http://10.1.0.6:2380,pg-node4=http://10.1.0.7:2380,pg-node5=http://10.1.0.8:2380
+initial-cluster: hq-node-01=http://10.0.0.4:2380,hq-node-02=http://10.0.0.5:2380,hq-node-03=http://10.0.0.6:2380,hq-node-04=http://10.0.0.7:2380,hq-node-05=http://10.0.0.8:2380
 
 initial-cluster-token: pg-etcd-cluster
 initial-cluster-state: new
@@ -205,20 +205,20 @@ initial-cluster-state: new
 
 # 7. Node 2 Configuration
 
-On **`pg-node2` (`10.1.0.5`)**, use the same configuration but change the node-specific values:
+On **`hq-node-02` (`10.0.0.5`)**, use the same configuration but change the node-specific values:
 
 ```yaml
-name: pg-node2
+name: hq-node-02
 
 data-dir: /var/lib/etcd
 
-initial-advertise-peer-urls: http://10.1.0.5:2380
-listen-peer-urls: http://10.1.0.5:2380
+initial-advertise-peer-urls: http://10.0.0.5:2380
+listen-peer-urls: http://10.0.0.5:2380
 
-listen-client-urls: http://10.1.0.5:2379,http://127.0.0.1:2379
-advertise-client-urls: http://10.1.0.5:2379
+listen-client-urls: http://10.0.0.5:2379,http://127.0.0.1:2379
+advertise-client-urls: http://10.0.0.5:2379
 
-initial-cluster: pg-node1=http://10.1.0.4:2380,pg-node2=http://10.1.0.5:2380,pg-node3=http://10.1.0.6:2380,pg-node4=http://10.1.0.7:2380,pg-node5=http://10.1.0.8:2380
+initial-cluster: hq-node-01=http://10.0.0.4:2380,hq-node-02=http://10.0.0.5:2380,hq-node-03=http://10.0.0.6:2380,hq-node-04=http://10.0.0.7:2380,hq-node-05=http://10.0.0.8:2380
 
 initial-cluster-token: pg-etcd-cluster
 initial-cluster-state: new
@@ -228,20 +228,20 @@ initial-cluster-state: new
 
 # 8. Node 3 Configuration
 
-On **`pg-node3` (`10.1.0.6`)**:
+On **`hq-node-03` (`10.0.0.6`)**:
 
 ```yaml
-name: pg-node3
+name: hq-node-03
 
 data-dir: /var/lib/etcd
 
-initial-advertise-peer-urls: http://10.1.0.6:2380
-listen-peer-urls: http://10.1.0.6:2380
+initial-advertise-peer-urls: http://10.0.0.6:2380
+listen-peer-urls: http://10.0.0.6:2380
 
-listen-client-urls: http://10.1.0.6:2379,http://127.0.0.1:2379
-advertise-client-urls: http://10.1.0.6:2379
+listen-client-urls: http://10.0.0.6:2379,http://127.0.0.1:2379
+advertise-client-urls: http://10.0.0.6:2379
 
-initial-cluster: pg-node1=http://10.1.0.4:2380,pg-node2=http://10.1.0.5:2380,pg-node3=http://10.1.0.6:2380,pg-node4=http://10.1.0.7:2380,pg-node5=http://10.1.0.8:2380
+initial-cluster: hq-node-01=http://10.0.0.4:2380,hq-node-02=http://10.0.0.5:2380,hq-node-03=http://10.0.0.6:2380,hq-node-04=http://10.0.0.7:2380,hq-node-05=http://10.0.0.8:2380
 
 initial-cluster-token: pg-etcd-cluster
 initial-cluster-state: new
@@ -251,20 +251,20 @@ initial-cluster-state: new
 
 # 9. Node 4 Configuration
 
-On **`pg-node4` (`10.1.0.7`)**:
+On **`hq-node-04` (`10.0.0.7`)**:
 
 ```yaml
-name: pg-node4
+name: hq-node-04
 
 data-dir: /var/lib/etcd
 
-initial-advertise-peer-urls: http://10.1.0.7:2380
-listen-peer-urls: http://10.1.0.7:2380
+initial-advertise-peer-urls: http://10.0.0.7:2380
+listen-peer-urls: http://10.0.0.7:2380
 
-listen-client-urls: http://10.1.0.7:2379,http://127.0.0.1:2379
-advertise-client-urls: http://10.1.0.7:2379
+listen-client-urls: http://10.0.0.7:2379,http://127.0.0.1:2379
+advertise-client-urls: http://10.0.0.7:2379
 
-initial-cluster: pg-node1=http://10.1.0.4:2380,pg-node2=http://10.1.0.5:2380,pg-node3=http://10.1.0.6:2380,pg-node4=http://10.1.0.7:2380,pg-node5=http://10.1.0.8:2380
+initial-cluster: hq-node-01=http://10.0.0.4:2380,hq-node-02=http://10.0.0.5:2380,hq-node-03=http://10.0.0.6:2380,hq-node-04=http://10.0.0.7:2380,hq-node-05=http://10.0.0.8:2380
 
 initial-cluster-token: pg-etcd-cluster
 initial-cluster-state: new
@@ -274,20 +274,20 @@ initial-cluster-state: new
 
 # 10. Node 5 Configuration
 
-On **`pg-node5` (`10.1.0.8`)**:
+On **`hq-node-05` (`10.0.0.8`)**:
 
 ```yaml
-name: pg-node5
+name: hq-node-05
 
 data-dir: /var/lib/etcd
 
-initial-advertise-peer-urls: http://10.1.0.8:2380
-listen-peer-urls: http://10.1.0.8:2380
+initial-advertise-peer-urls: http://10.0.0.8:2380
+listen-peer-urls: http://10.0.0.8:2380
 
-listen-client-urls: http://10.1.0.8:2379,http://127.0.0.1:2379
-advertise-client-urls: http://10.1.0.8:2379
+listen-client-urls: http://10.0.0.8:2379,http://127.0.0.1:2379
+advertise-client-urls: http://10.0.0.8:2379
 
-initial-cluster: pg-node1=http://10.1.0.4:2380,pg-node2=http://10.1.0.5:2380,pg-node3=http://10.1.0.6:2380,pg-node4=http://10.1.0.7:2380,pg-node5=http://10.1.0.8:2380
+initial-cluster: hq-node-01=http://10.0.0.4:2380,hq-node-02=http://10.0.0.5:2380,hq-node-03=http://10.0.0.6:2380,hq-node-04=http://10.0.0.7:2380,hq-node-05=http://10.0.0.8:2380
 
 initial-cluster-token: pg-etcd-cluster
 initial-cluster-state: new
@@ -376,11 +376,11 @@ For the initial cluster creation, start the etcd services on the **five VMs at a
 The five nodes are:
 
 ```text
-pg-node1 → 10.1.0.4
-pg-node2 → 10.1.0.5
-pg-node3 → 10.1.0.6
-pg-node4 → 10.1.0.7
-pg-node5 → 10.1.0.8
+hq-node-01 → 10.0.0.4
+hq-node-02 → 10.0.0.5
+hq-node-03 → 10.0.0.6
+hq-node-04 → 10.0.0.7
+hq-node-05 → 10.0.0.8
 ```
 
 This helps avoid initial cluster formation and connection issues.
@@ -393,7 +393,7 @@ From any node, run:
 
 ```bash
 etcdctl \
-  --endpoints=http://10.1.0.4:2379,http://10.1.0.5:2379,http://10.1.0.6:2379,http://10.1.0.7:2379,http://10.1.0.8:2379 \
+  --endpoints=http://10.0.0.4:2379,http://10.0.0.5:2379,http://10.0.0.6:2379,http://10.0.0.7:2379,http://10.0.0.8:2379 \
   endpoint status \
   --write-out=table
 ```
@@ -412,11 +412,11 @@ Example:
 +-------------------------+------------------+---------+---------+-----------+
 |        ENDPOINT         |        ID        | VERSION | DB SIZE | IS LEADER |
 +-------------------------+------------------+---------+---------+-----------+
-| 10.1.0.4:2379           | ...              | 3.7.1   | ...     | false     |
-| 10.1.0.5:2379           | ...              | 3.7.1   | ...     | true      |
-| 10.1.0.6:2379           | ...              | 3.7.1   | ...     | false     |
-| 10.1.0.7:2379           | ...              | 3.7.1   | ...     | false     |
-| 10.1.0.8:2379           | ...              | 3.7.1   | ...     | false     |
+| 10.0.0.4:2379           | ...              | 3.7.1   | ...     | false     |
+| 10.0.0.5:2379           | ...              | 3.7.1   | ...     | true      |
+| 10.0.0.6:2379           | ...              | 3.7.1   | ...     | false     |
+| 10.0.0.7:2379           | ...              | 3.7.1   | ...     | false     |
+| 10.0.0.8:2379           | ...              | 3.7.1   | ...     | false     |
 +-------------------------+------------------+---------+---------+-----------+
 ```
 
@@ -430,7 +430,7 @@ You can also check the members using:
 
 ```bash
 etcdctl \
-  --endpoints=http://10.1.0.4:2379,http://10.1.0.5:2379,http://10.1.0.6:2379,http://10.1.0.7:2379,http://10.1.0.8:2379 \
+  --endpoints=http://10.0.0.4:2379,http://10.0.0.5:2379,http://10.0.0.6:2379,http://10.0.0.7:2379,http://10.0.0.8:2379 \
   member list \
   --write-out=table
 ```
@@ -438,11 +438,11 @@ etcdctl \
 You should see all five members:
 
 ```text
-pg-node1
-pg-node2
-pg-node3
-pg-node4
-pg-node5
+hq-node-01
+hq-node-02
+hq-node-03
+hq-node-04
+hq-node-05
 ```
 
 ---
@@ -487,18 +487,18 @@ sudo ss -lntp | grep -E '2379|2380'
 From one VM, test the other nodes:
 
 ```bash
-ping -c 3 pg-node1
-ping -c 3 pg-node2
-ping -c 3 pg-node3
-ping -c 3 pg-node4
-ping -c 3 pg-node5
+ping -c 3 hq-node-01
+ping -c 3 hq-node-02
+ping -c 3 hq-node-03
+ping -c 3 hq-node-04
+ping -c 3 hq-node-05
 ```
 
 You can also test the etcd ports:
 
 ```bash
-nc -zv 10.1.0.4 2379
-nc -zv 10.1.0.4 2380
+nc -zv 10.0.0.4 2379
+nc -zv 10.0.0.4 2380
 ```
 
 Repeat for the other nodes if necessary.
@@ -533,7 +533,7 @@ The main command to verify the cluster is:
 
 ```bash
 etcdctl \
-  --endpoints=http://10.1.0.4:2379,http://10.1.0.5:2379,http://10.1.0.6:2379,http://10.1.0.7:2379,http://10.1.0.8:2379 endpoint status --write-out=table
+  --endpoints=http://10.0.0.4:2379,http://10.0.0.5:2379,http://10.0.0.6:2379,http://10.0.0.7:2379,http://10.0.0.8:2379 endpoint status --write-out=table
 ```
 
 If all five endpoints are healthy and one node is the leader, the etcd cluster is successfully configured.
