@@ -60,9 +60,11 @@ backend postgres_primary
 frontend stats
     bind *:8404
     mode http
+
     stats enable
     stats uri /stats
     stats refresh 10s
+    stats show-legends
 EOF
 
 # Validate the HAProxy configuration

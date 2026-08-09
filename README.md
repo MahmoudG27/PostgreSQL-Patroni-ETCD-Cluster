@@ -60,11 +60,11 @@ source ~/.bashrc
 خليني ألخصلك كل حاجة في جدول واحد، لأن كل exporter بيراقب طبقة مختلفة تمامًا:
 
 # The Exporters
-    ├── node_exporter:      for OS (CPU, RAM, Disk, Network) on all VMs
-    ├── postgres_exporter:  for PostgreSQL (connections, transactions, locks, table sizes) on the PostgreSQL nodes 5 only
-    ├── Patroni /metrics:   for Cluster situation (who is Primary and node situation, replication lag) No installation required - it's already built into Patroni itself
-    ├── etcd /metrics:      for ETCD health (quorum, leader election) No installation required - it's already built into ETCD itself
-    └── haproxy_exporter:   for reads Stats page from HAproxy
+    ├── node_exporter:      for OS (CPU, RAM, Disk, Network) on all VMs on 9100
+    ├── postgres_exporter:  for PostgreSQL (connections, transactions, locks, table sizes) on the PostgreSQL nodes 5 only on 9187
+    ├── Patroni /metrics:   for Cluster situation (who is Primary and node situation, replication lag) No installation required - it's already built into Patroni itself on 8008/metrics
+    ├── etcd /metrics:      for ETCD health (quorum, leader election) No installation required - it's already built into ETCD itself on 2379/metrics
+    └── haproxy_exporter:   for reads Stats page from HAproxy on 9101
 
 # Monitoring the Backup (Backup Status)
 # Dashboards required "Backup job status (success/failure, last successful backup timestamp)" but there is no exporter for pgBackRest

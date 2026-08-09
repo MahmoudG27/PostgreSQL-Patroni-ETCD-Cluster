@@ -42,7 +42,7 @@ sudo mkdir -p /etc/patroni
 sudo tee /etc/patroni/patroni.yml <<EOF
 scope: pg_cluster_hq
 namespace: /db/
-name: hq-node1
+name: hq-node-01
 
 restapi:
   listen: 10.0.0.4:8008
@@ -106,7 +106,7 @@ EOF
 # pg-node2, pg-node3, pg-node4, pg-node5, Same file but change the name and IP for each node:
 
 # pg-node2:
-name: pg-node2
+name: hq-node-02
 restapi:
   listen: 10.0.0.5:8008
   connect_address: 10.0.0.5:8008
@@ -115,7 +115,7 @@ postgresql:
   connect_address: 10.0.0.5:5432
 
 # pg-node3:
-name: pg-node3
+name: hq-node-03
 restapi:
   listen: 10.0.0.6:8008
   connect_address: 10.0.0.6:8008
@@ -124,7 +124,7 @@ postgresql:
   connect_address: 10.0.0.6:5432
 
 # pg-node4:
-name: pg-node4
+name: hq-node-04
 restapi:
   listen: 10.0.0.7:8008
   connect_address: 10.0.0.7:8008
@@ -133,7 +133,7 @@ postgresql:
   connect_address: 10.0.0.7:5432
 
 # pg-node5:
-name: pg-node5
+name: hq-node-05
 restapi:
   listen: 10.0.0.8:8008
   connect_address: 10.0.0.8:8008

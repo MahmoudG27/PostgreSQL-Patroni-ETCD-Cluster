@@ -4,7 +4,7 @@
 sudo apt install -y pgbackrest
 
 # Install pgBackRest and create the backup directory on the Backup VM
-sudo apt install -y pgbackrest
+sudo apt install -y pgbackrest jq
 sudo mkdir -p /var/lib/pgbackrest
 
 # On the Backup VM, create a new user called "postgres" (if it doesn't already exist) and set up SSH access for the postgres user on all 5 PostgreSQL nodes. This is necessary for pgBackRest to perform backups over SSH.
