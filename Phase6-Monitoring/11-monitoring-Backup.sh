@@ -31,66 +31,212 @@ sudo systemctl daemon-reload
 sudo systemctl restart node_exporter
 
 # 4. Try pgBackRest JSON on Backup Server:
-sudo -u postgres pgbackrest --stanza=pg_cluster_hq --output=json info # Should return JSON and that better than normal output because pgBackRest recommands use --output=json for machine-readable output.
+sudo -u postgres pgbackrest --stanza=pg_cluster_hq --output=json info   # ⚠️ CHANGE TO pg_cluster_dr ON THE DR BACKUP VM
+# Should return JSON and that better than normal output because pgBackRest recommands use --output=json for machine-readable output.
 
 # 5. Create Script for metrics
 sudo vim /usr/local/bin/pgbackrest_metrics.sh
+
 # And Insert:
+
 #!/bin/bash
 
-set -e
+set -u
 
 STANZA="pg_cluster_hq"
 TEXTFILE_DIR="/var/lib/node_exporter/textfile_collector"
+
 OUTPUT_FILE="${TEXTFILE_DIR}/pgbackrest.prom"
 TMP_FILE="${OUTPUT_FILE}.$$"
+
+BACKUP_SUCCESS=0
+STANZA_STATUS=0
+BACKUP_COUNT=0
+LAST_BACKUP=0
+BACKUP_AGE=0
+LAST_WAL_TS=0
+
+# ------------------------------------------------------------
+# Get pgBackRest JSON information
+# ------------------------------------------------------------
 
 JSON=$(sudo -u postgres pgbackrest \
     --stanza="${STANZA}" \
     --output=json \
-    info)
+    info 2>/dev/null)
 
-STATUS=$(echo "$JSON" | jq -r '.[0].status // "unknown"')
+PG_BACKREST_EXIT=$?
 
-if [ "$STATUS" = "ok" ]; then
+# ------------------------------------------------------------
+# Handle pgBackRest failure
+# ------------------------------------------------------------
+
+if [ ${PG_BACKREST_EXIT} -ne 0 ] || [ -z "${JSON}" ]; then
+
+    cat > "${TMP_FILE}" <<EOF
+# HELP pgbackrest_stanza_status pgBackRest stanza health status. 1=healthy, 0=unhealthy.
+# TYPE pgbackrest_stanza_status gauge
+pgbackrest_stanza_status{stanza="${STANZA}"} 0
+
+# HELP pgbackrest_check_failed pgBackRest monitoring check failed. 1=failed, 0=success.
+# TYPE pgbackrest_check_failed gauge
+pgbackrest_check_failed{stanza="${STANZA}"} 1
+
+# HELP pgbackrest_backup_success Whether a valid successful backup exists. 1=success, 0=failure.
+# TYPE pgbackrest_backup_success gauge
+pgbackrest_backup_success{stanza="${STANZA}"} 0
+
+# HELP pgbackrest_last_backup_timestamp_seconds Unix timestamp of the last completed backup.
+# TYPE pgbackrest_last_backup_timestamp_seconds gauge
+pgbackrest_last_backup_timestamp_seconds{stanza="${STANZA}"} 0
+
+# HELP pgbackrest_backup_age_seconds Age of the last completed backup in seconds.
+# TYPE pgbackrest_backup_age_seconds gauge
+pgbackrest_backup_age_seconds{stanza="${STANZA}"} 0
+
+# HELP pgbackrest_backup_count Number of backups reported by pgBackRest.
+# TYPE pgbackrest_backup_count gauge
+pgbackrest_backup_count{stanza="${STANZA}"} 0
+
+# HELP pgbackrest_last_wal_archived_timestamp_seconds Unix timestamp of the newest WAL archive file.
+# TYPE pgbackrest_last_wal_archived_timestamp_seconds gauge
+pgbackrest_last_wal_archived_timestamp_seconds{stanza="${STANZA}"} 0
+EOF
+
+    chown node_exporter:node_exporter "${TMP_FILE}"
+    mv "${TMP_FILE}" "${OUTPUT_FILE}"
+
+    exit 0
+fi
+
+# ------------------------------------------------------------
+# Stanza status
+# ------------------------------------------------------------
+
+STATUS=$(echo "${JSON}" | jq -r '.[0].status // "unknown"')
+
+if [ "${STATUS}" = "ok" ]; then
     STANZA_STATUS=1
 else
     STANZA_STATUS=0
 fi
 
-LAST_BACKUP=$(echo "$JSON" | jq -r '
+# ------------------------------------------------------------
+# Last successful backup
+# ------------------------------------------------------------
+
+LAST_BACKUP=$(echo "${JSON}" | jq -r '
     .[0].backup[-1].timestamp.stop // 0
 ')
 
-LAST_WAL=$(echo "$JSON" | jq -r '
-    .[0].archive[-1].max // ""
-')
+if ! [[ "${LAST_BACKUP}" =~ ^[0-9]+$ ]]; then
+    LAST_BACKUP=0
+fi
 
-BACKUP_COUNT=$(echo "$JSON" | jq '
+# ------------------------------------------------------------
+# Backup count
+# ------------------------------------------------------------
+
+BACKUP_COUNT=$(echo "${JSON}" | jq -r '
     [.[0].backup[]?] | length
 ')
 
-cat > "$TMP_FILE" <<EOF
+if ! [[ "${BACKUP_COUNT}" =~ ^[0-9]+$ ]]; then
+    BACKUP_COUNT=0
+fi
+
+# ------------------------------------------------------------
+# Backup age
+# ------------------------------------------------------------
+
+if [ "${LAST_BACKUP}" -gt 0 ]; then
+
+    CURRENT_TIME=$(date +%s)
+
+    BACKUP_AGE=$((CURRENT_TIME - LAST_BACKUP))
+
+    if [ "${BACKUP_AGE}" -lt 0 ]; then
+        BACKUP_AGE=0
+    fi
+
+fi
+
+# ------------------------------------------------------------
+# Backup success
+# ------------------------------------------------------------
+
+if [ "${STANZA_STATUS}" -eq 1 ] &&
+   [ "${LAST_BACKUP}" -gt 0 ]; then
+
+    BACKUP_SUCCESS=1
+
+fi
+
+# ------------------------------------------------------------
+# Latest WAL archive
+#
+# pgBackRest JSON provides the latest WAL name.
+# The filesystem mtime is used as the timestamp.
+# ------------------------------------------------------------
+
+LAST_WAL_FILE=$(find \
+    "/var/lib/pgbackrest/archive/${STANZA}" \
+    -type f \
+    -printf '%T@ %p\n' 2>/dev/null \
+    | sort -n \
+    | tail -n 1 \
+    | cut -d' ' -f2-)
+
+if [ -n "${LAST_WAL_FILE}" ] &&
+   [ -f "${LAST_WAL_FILE}" ]; then
+
+    LAST_WAL_TS=$(stat \
+        -c %Y \
+        "${LAST_WAL_FILE}" 2>/dev/null || echo 0)
+
+fi
+
+# ------------------------------------------------------------
+# Write Prometheus metrics
+# ------------------------------------------------------------
+
+cat > "${TMP_FILE}" <<EOF
 # HELP pgbackrest_stanza_status pgBackRest stanza health status. 1=healthy, 0=unhealthy.
 # TYPE pgbackrest_stanza_status gauge
 pgbackrest_stanza_status{stanza="${STANZA}"} ${STANZA_STATUS}
+
+# HELP pgbackrest_check_failed pgBackRest monitoring check failed. 1=failed, 0=success.
+# TYPE pgbackrest_check_failed gauge
+pgbackrest_check_failed{stanza="${STANZA}"} 0
+
+# HELP pgbackrest_backup_success Whether a valid successful backup exists. 1=success, 0=failure.
+# TYPE pgbackrest_backup_success gauge
+pgbackrest_backup_success{stanza="${STANZA}"} ${BACKUP_SUCCESS}
 
 # HELP pgbackrest_last_backup_timestamp_seconds Unix timestamp of the last completed backup.
 # TYPE pgbackrest_last_backup_timestamp_seconds gauge
 pgbackrest_last_backup_timestamp_seconds{stanza="${STANZA}"} ${LAST_BACKUP}
 
+# HELP pgbackrest_backup_age_seconds Age of the last completed backup in seconds.
+# TYPE pgbackrest_backup_age_seconds gauge
+pgbackrest_backup_age_seconds{stanza="${STANZA}"} ${BACKUP_AGE}
+
 # HELP pgbackrest_backup_count Number of backups reported by pgBackRest.
 # TYPE pgbackrest_backup_count gauge
 pgbackrest_backup_count{stanza="${STANZA}"} ${BACKUP_COUNT}
 
-# HELP pgbackrest_last_archived_wal Last archived WAL segment.
-# TYPE pgbackrest_last_archived_wal gauge
-pgbackrest_last_archived_wal{stanza="${STANZA}",wal="${LAST_WAL}"} 1
+# HELP pgbackrest_last_wal_archived_timestamp_seconds Unix timestamp of the newest WAL archive file.
+# TYPE pgbackrest_last_wal_archived_timestamp_seconds gauge
+pgbackrest_last_wal_archived_timestamp_seconds{stanza="${STANZA}"} ${LAST_WAL_TS}
 EOF
 
-chown node_exporter:node_exporter "$TMP_FILE"
+# ------------------------------------------------------------
+# Atomic update
+# ------------------------------------------------------------
 
-mv "$TMP_FILE" "$OUTPUT_FILE"
+chown node_exporter:node_exporter "${TMP_FILE}"
+
+mv "${TMP_FILE}" "${OUTPUT_FILE}"
 
 
 # Chanege permissions:
@@ -105,10 +251,12 @@ curl http://localhost:9100/metrics | grep pgbackrest
 
 # You should see something like that: 
 pgbackrest_stanza_status
+pgbackrest_check_failed
+pgbackrest_backup_success
 pgbackrest_last_backup_timestamp_seconds
+pgbackrest_backup_age_seconds
 pgbackrest_backup_count
-pgbackrest_last_archived_wal
-
+pgbackrest_last_wal_archived_timestamp_seconds
 
 # 8. Run the script automatically:
 # We prefer use systemd timer instead cron here because it is monitoring job.

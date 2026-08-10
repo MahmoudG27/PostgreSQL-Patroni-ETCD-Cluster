@@ -51,61 +51,28 @@ Since **Patroni** will manage the PostgreSQL process later, we need to stop and 
 
 ---
 
-## 3. Stop and Disable the Default PostgreSQL Service
+## 3. Drop the Default PostgreSQL Cluster
 
-Stop PostgreSQL:
+During installation, Debian/Ubuntu automatically creates a default PostgreSQL cluster named `main` and starts its `systemd` service.
+Since **Patroni** will initialize and manage the cluster, we must remove this default cluster. 
 
-```bash
-sudo systemctl stop postgresql
-```
-
-Disable it so that `systemd` does not start PostgreSQL automatically:
+The cleanest way to do this on Debian/Ubuntu is using the `pg_dropcluster` utility:
 
 ```bash
-sudo systemctl disable postgresql
+sudo pg_dropcluster 18 main --stop
 ```
-
-### Why?
-
-Patroni will be responsible for managing the PostgreSQL process.
-
-Therefore, PostgreSQL should **not** be managed directly by `systemd`.
 
 ---
 
-## 4. Remove the Automatically Created Data Directory
+## 4. Create an Empty Data Directory for Patroni
 
-During installation, PostgreSQL automatically creates a default data directory.
+Patroni needs a clean, empty directory with the correct permissions to initialize the new cluster:
 
-Patroni needs to initialize and manage the PostgreSQL data directory itself, so we remove the automatically created directory:
-
-```bash
-sudo rm -rf /var/lib/postgresql/18/main
-```
-
-Create an empty data directory:
-
-```bash
+```Bash
 sudo mkdir -p /var/lib/postgresql/18/main
-```
-
-Set the correct owner:
-
-```bash
 sudo chown postgres:postgres /var/lib/postgresql/18/main
-```
-
-Set the required permissions:
-
-```bash
 sudo chmod 700 /var/lib/postgresql/18/main
 ```
-
-At this point, the directory should be:
-
-* Empty
-* Owned by the `postgres` user
-* Accessible only by the owner
 
 ---
 
@@ -140,7 +107,6 @@ If you want to run all the steps together, you can use the following script:
 
 ```bash
 #!/bin/bash
-
 set -e
 
 # PostgreSQL version
@@ -161,12 +127,8 @@ sudo apt update
 # Install PostgreSQL
 sudo apt install -y postgresql-${PG_VERSION} postgresql-client-${PG_VERSION}
 
-# Patroni will manage PostgreSQL, not systemd
-sudo systemctl stop postgresql
-sudo systemctl disable postgresql
-
-# Remove the automatically created PostgreSQL data directory
-sudo rm -rf /var/lib/postgresql/${PG_VERSION}/main
+# Stop and remove the default PostgreSQL cluster cleanly
+sudo pg_dropcluster ${PG_VERSION} main --stop
 
 # Create an empty data directory for Patroni
 sudo mkdir -p /var/lib/postgresql/${PG_VERSION}/main

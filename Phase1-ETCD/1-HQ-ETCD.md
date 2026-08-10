@@ -118,6 +118,13 @@ etcd --version
 etcdctl version
 ```
 
+### Run ETCD as User
+
+```bash
+sudo useradd -r -s /usr/sbin/nologin etcd
+sudo chown -R etcd:etcd /var/lib/etcd
+```
+
 ---
 
 # 4. Create the etcd Configuration Directory
@@ -176,122 +183,35 @@ The following values must be changed according to the VM:
 
 ---
 
-# 6. Node 1 Configuration
+# 6. Configure etcd on All Nodes
 
-On **`hq-node-01` (`10.0.0.4`)**, create:
+On **each VM**, create the configuration file:
 
-```text
-/etc/etcd/etcd.conf.yml
+```bash
+sudo vim /etc/etcd/etcd.conf.yml
 ```
 
+Paste the following template, but ensure you change <NODE_NAME> and <NODE_IP> to match the specific VM you are configuring:
+
 ```yaml
-name: hq-node-01
+name: <NODE_NAME>
 
 data-dir: /var/lib/etcd
 
-initial-advertise-peer-urls: http://10.0.0.4:2380
-listen-peer-urls: http://10.0.0.4:2380
+initial-advertise-peer-urls: http://<NODE_IP>:2380
+listen-peer-urls: http://<NODE_IP>:2380
 
-listen-client-urls: http://10.0.0.4:2379,http://127.0.0.1:2379
-advertise-client-urls: http://10.0.0.4:2379
+listen-client-urls: http://<NODE_IP>:2379,[http://127.0.0.1:2379](http://127.0.0.1:2379)
+advertise-client-urls: http://<NODE_IP>:2379
 
-initial-cluster: hq-node-01=http://10.0.0.4:2380,hq-node-02=http://10.0.0.5:2380,hq-node-03=http://10.0.0.6:2380,hq-node-04=http://10.0.0.7:2380,hq-node-05=http://10.0.0.8:2380
+# This line remains EXACTLY the same on all 5 nodes
+initial-cluster: hq-node-01=[http://10.0.0.4:2380](http://10.0.0.4:2380),hq-node-02=[http://10.0.0.5:2380](http://10.0.0.5:2380),hq-node-03=[http://10.0.0.6:2380](http://10.0.0.6:2380),hq-node-04=[http://10.0.0.7:2380](http://10.0.0.7:2380),hq-node-05=[http://10.0.0.8:2380](http://10.0.0.8:2380)
 
 initial-cluster-token: pg-etcd-cluster
 initial-cluster-state: new
 ```
 
----
-
-# 7. Node 2 Configuration
-
-On **`hq-node-02` (`10.0.0.5`)**, use the same configuration but change the node-specific values:
-
-```yaml
-name: hq-node-02
-
-data-dir: /var/lib/etcd
-
-initial-advertise-peer-urls: http://10.0.0.5:2380
-listen-peer-urls: http://10.0.0.5:2380
-
-listen-client-urls: http://10.0.0.5:2379,http://127.0.0.1:2379
-advertise-client-urls: http://10.0.0.5:2379
-
-initial-cluster: hq-node-01=http://10.0.0.4:2380,hq-node-02=http://10.0.0.5:2380,hq-node-03=http://10.0.0.6:2380,hq-node-04=http://10.0.0.7:2380,hq-node-05=http://10.0.0.8:2380
-
-initial-cluster-token: pg-etcd-cluster
-initial-cluster-state: new
-```
-
----
-
-# 8. Node 3 Configuration
-
-On **`hq-node-03` (`10.0.0.6`)**:
-
-```yaml
-name: hq-node-03
-
-data-dir: /var/lib/etcd
-
-initial-advertise-peer-urls: http://10.0.0.6:2380
-listen-peer-urls: http://10.0.0.6:2380
-
-listen-client-urls: http://10.0.0.6:2379,http://127.0.0.1:2379
-advertise-client-urls: http://10.0.0.6:2379
-
-initial-cluster: hq-node-01=http://10.0.0.4:2380,hq-node-02=http://10.0.0.5:2380,hq-node-03=http://10.0.0.6:2380,hq-node-04=http://10.0.0.7:2380,hq-node-05=http://10.0.0.8:2380
-
-initial-cluster-token: pg-etcd-cluster
-initial-cluster-state: new
-```
-
----
-
-# 9. Node 4 Configuration
-
-On **`hq-node-04` (`10.0.0.7`)**:
-
-```yaml
-name: hq-node-04
-
-data-dir: /var/lib/etcd
-
-initial-advertise-peer-urls: http://10.0.0.7:2380
-listen-peer-urls: http://10.0.0.7:2380
-
-listen-client-urls: http://10.0.0.7:2379,http://127.0.0.1:2379
-advertise-client-urls: http://10.0.0.7:2379
-
-initial-cluster: hq-node-01=http://10.0.0.4:2380,hq-node-02=http://10.0.0.5:2380,hq-node-03=http://10.0.0.6:2380,hq-node-04=http://10.0.0.7:2380,hq-node-05=http://10.0.0.8:2380
-
-initial-cluster-token: pg-etcd-cluster
-initial-cluster-state: new
-```
-
----
-
-# 10. Node 5 Configuration
-
-On **`hq-node-05` (`10.0.0.8`)**:
-
-```yaml
-name: hq-node-05
-
-data-dir: /var/lib/etcd
-
-initial-advertise-peer-urls: http://10.0.0.8:2380
-listen-peer-urls: http://10.0.0.8:2380
-
-listen-client-urls: http://10.0.0.8:2379,http://127.0.0.1:2379
-advertise-client-urls: http://10.0.0.8:2379
-
-initial-cluster: hq-node-01=http://10.0.0.4:2380,hq-node-02=http://10.0.0.5:2380,hq-node-03=http://10.0.0.6:2380,hq-node-04=http://10.0.0.7:2380,hq-node-05=http://10.0.0.8:2380
-
-initial-cluster-token: pg-etcd-cluster
-initial-cluster-state: new
-```
+Example for Node 1: Replace <NODE_NAME> with hq-node-01 and <NODE_IP> with 10.0.0.4.
 
 ---
 
@@ -312,6 +232,8 @@ After=network.target
 
 [Service]
 Type=notify
+User=etcd
+Group=etcd
 ExecStart=/usr/local/bin/etcd --config-file /etc/etcd/etcd.conf.yml
 Restart=always
 RestartSec=5

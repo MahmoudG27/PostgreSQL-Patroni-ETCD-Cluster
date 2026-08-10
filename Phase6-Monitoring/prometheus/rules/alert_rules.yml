@@ -1,0 +1,147 @@
+groups:
+
+  # =================================================================
+  # Patroni / PostgreSQL cluster health
+  # =================================================================
+  - name: patroni_alerts
+    rules:
+
+      - alert: PatroniNoLeader
+        expr: sum by (site) (patroni_master) == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "No Patroni leader in site {{ $labels.site }}"
+          description: "No node is currently reporting as primary/leader for more than 30s. Writes are likely unavailable."
+
+      - alert: PatroniReplicationLagHigh
+        expr: patroni_xlog_paused == 0 and patroni_replication_lag_bytes > 50000000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Replication lag high on {{ $labels.instance }}"
+          description: "Replica {{ $labels.instance }} is more than 50MB behind the primary for over 2 minutes."
+
+      - alert: PatroniNodeDown
+        expr: up{job=~"patroni_hq|patroni_dr"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Patroni REST API unreachable on {{ $labels.instance }}"
+          description: "Prometheus cannot reach the Patroni REST API on {{ $labels.instance }} for over 1 minute."
+
+  # =================================================================
+  # etcd cluster health
+  # =================================================================
+  - name: etcd_alerts
+    rules:
+
+      - alert: EtcdNoLeader
+        expr: sum by (site) (etcd_server_has_leader) == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "etcd cluster in {{ $labels.site }} has no leader"
+          description: "The etcd cluster has lost its leader — Patroni cannot perform failover until quorum is restored."
+
+      - alert: EtcdInsufficientMembers
+        expr: count by (site) (up{job=~"etcd_hq|etcd_dr"} == 1) < 2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "etcd quorum at risk in {{ $labels.site }}"
+          description: "Fewer than 2 etcd members are reachable in {{ $labels.site }}. One more failure will lose quorum."
+
+  # =================================================================
+  # pgBackRest / backup health
+  # =================================================================
+  - name: pgbackrest_alerts
+    rules:
+
+      - alert: PgBackRestCheckFailed
+        expr: pgbackrest_check_failed == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "pgBackRest monitoring check failing on {{ $labels.stanza }}"
+          description: "The pgbackrest_metrics.sh script has been unable to reach pgBackRest for 10+ minutes. Metrics may be stale."
+
+      - alert: PgBackRestStanzaUnhealthy
+        expr: pgbackrest_stanza_status == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "pgBackRest stanza {{ $labels.stanza }} unhealthy"
+          description: "pgBackRest reports the stanza status as not OK for over 10 minutes."
+
+      - alert: PgBackRestBackupTooOld
+        expr: pgbackrest_backup_age_seconds > 8 * 24 * 3600
+        labels:
+          severity: warning
+        annotations:
+          summary: "Last backup for {{ $labels.stanza }} is over 8 days old"
+          description: "Expected a full backup weekly (every Sunday). No successful backup in over 8 days."
+
+      - alert: PgBackRestWalArchivingStalled
+        expr: (time() - pgbackrest_last_wal_archived_timestamp_seconds) > 3600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "WAL archiving stalled for {{ $labels.stanza }}"
+          description: "No new WAL segment archived in over 1 hour. PITR coverage is at risk and the primary's WAL directory could fill up."
+
+  # =================================================================
+  # Disk space (all VMs, both sites)
+  # =================================================================
+  - name: disk_alerts
+    rules:
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) * 100 < 15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk space low on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+          description: "Less than 15% free space remaining. On PostgreSQL/Backup nodes this can stop WAL archiving or backups entirely."
+
+      - alert: DiskSpaceCritical
+        expr: (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) * 100 < 5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk space critical on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+          description: "Less than 5% free space remaining — imminent risk of service failure."
+
+  # =================================================================
+  # HAProxy / connectivity layer
+  # =================================================================
+  - name: haproxy_alerts
+    rules:
+
+      - alert: HAProxyAllBackendsDown
+        expr: sum by (site) (haproxy_server_up{proxy="postgres_primary"}) == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "All PostgreSQL backends down behind HAProxy in {{ $labels.site }}"
+          description: "HAProxy has no healthy backend to route to — applications cannot reach the database."
+
+      - alert: HAProxyExporterDown
+        expr: up{job=~"haproxy_exporter_hq|haproxy_exporter_dr"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "haproxy_exporter unreachable on {{ $labels.instance }}"
+          description: "Cannot confirm HAProxy health — the exporter itself is not responding."

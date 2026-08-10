@@ -231,6 +231,18 @@ patronictl list
 
 ---
 
+# 7. Disable and mask the PostgreSQL virtual service 
+
+Currently, if you reboot the server, the postgresql.service service of the operating system will start automatically before Patroni, and will reserve port 5432 and the Data Directory, which will cause Patroni to fail.
+
+```bash
+sudo systemctl stop postgresql
+sudo systemctl disable postgresql
+sudo systemctl mask postgresql
+```
+
+---
+
 # 7. Create Patroni Configuration Directory
 
 Create the configuration directory:
@@ -496,6 +508,25 @@ postgresql:
 
 ---
 
+# Configure .pgpass file to connect DR with HQ 
+
+Where dr-node-01 is up, Patroni will use pg_basebackup to pull the data for first time from HQ Primary (10.0.0.100).
+For this process to succeed without requiring a non-interactive password, we must prepare a .pgpass file for the postgres server on all DR nodes.
+Create .pgpass for postgres user to authenticate with HQ Primary
+
+```bash
+# Create .pgpass for postgres user to authenticate with HQ Primary
+sudo -u postgres bash -c 'cat <<EOF > /var/lib/postgresql/.pgpass
+10.0.0.100:5432:*:replicator:YOUR_REPLICATION_PASSWORD
+EOF'
+```
+
+```bash
+sudo chmod 600 /var/lib/postgresql/.pgpass
+```
+
+---
+
 # 17. Configuration Values That Must Match
 
 The following values should be consistent across all five DR configuration files:
@@ -528,8 +559,9 @@ Create the service on **all five DR VMs**:
 ```bash
 sudo tee /etc/systemd/system/patroni.service <<EOF
 [Unit]
-Description=Patroni PostgreSQL HA
-After=network.target etcd.service
+Description=Patroni PostgreSQL DR
+After=network.target network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -571,6 +603,7 @@ Set the Patroni configuration ownership:
 
 ```bash
 sudo chown postgres:postgres /etc/patroni/patroni.yml
+sudo chmod 600 /etc/patroni/patroni.yml
 ```
 
 Verify:

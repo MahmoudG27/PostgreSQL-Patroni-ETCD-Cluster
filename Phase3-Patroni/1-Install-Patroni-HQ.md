@@ -184,6 +184,18 @@ patronictl list
 
 ---
 
+# 7. Disable and mask the PostgreSQL virtual service 
+
+Currently, if you reboot the server, the postgresql.service service of the operating system will start automatically before Patroni, and will reserve port 5432 and the Data Directory, which will cause Patroni to fail.
+
+```bash
+sudo systemctl stop postgresql
+sudo systemctl disable postgresql
+sudo systemctl mask postgresql
+```
+
+---
+
 # 7. Create the Patroni Configuration Directory
 
 Create the configuration directory:
@@ -378,7 +390,8 @@ Create the systemd service on **all five VMs**:
 sudo tee /etc/systemd/system/patroni.service <<EOF
 [Unit]
 Description=Patroni PostgreSQL HA
-After=network.target etcd.service
+After=network.target network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -420,6 +433,7 @@ Also make sure the Patroni configuration file is owned by `postgres`:
 
 ```bash
 sudo chown postgres:postgres /etc/patroni/patroni.yml
+sudo chmod 600 /etc/patroni/patroni.yml
 ```
 
 You can verify the ownership with:

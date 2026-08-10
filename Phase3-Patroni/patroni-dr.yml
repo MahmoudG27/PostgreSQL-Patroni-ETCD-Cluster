@@ -1,18 +1,18 @@
-scope: pg_cluster_hq
+scope: pg_cluster_dr
 namespace: /db
-name: hq-node-01
+name: dr-node-01
 
 etcd3:
   hosts:
-    - 10.0.0.4:2379
-    - 10.0.0.5:2379
-    - 10.0.0.6:2379
-    - 10.0.0.7:2379
-    - 10.0.0.8:2379
+    - 10.1.0.4:2379
+    - 10.1.0.5:2379
+    - 10.1.0.6:2379
+    - 10.1.0.7:2379
+    - 10.1.0.8:2379
 
 restapi:
-  listen: 10.0.0.4:8008
-  connect_address: 10.0.0.4:8008
+  listen: 10.1.0.4:8008
+  connect_address: 10.1.0.4:8008
 
 bootstrap:
   dcs:
@@ -23,6 +23,10 @@ bootstrap:
     synchronous_mode: true
     synchronous_mode_strict: false
     synchronous_node_count: 1
+    standby_cluster:
+      host: 10.0.0.100
+      port: 5432
+      primary_slot_name: dr_standby_slot
     postgresql:
       use_pg_rewind: true
       use_slots: true
@@ -38,13 +42,13 @@ bootstrap:
     - data-checksums
 
   pg_hba:
-    - host replication replicator 10.0.0.0/24 md5
-    - host all all 10.0.0.0/24 md5
+    - host replication replicator 10.1.0.0/24 md5
+    - host all all 10.1.0.0/24 md5
     - host all all local trust
 
 postgresql:
-  listen: 10.0.0.4:5432
-  connect_address: 10.0.0.4:5432
+  listen: 10.1.0.4:5432
+  connect_address: 10.1.0.4:5432
   data_dir: /var/lib/postgresql/18/main
   bin_dir: /usr/lib/postgresql/18/bin
   pgpass: /var/lib/postgresql/.pgpass
