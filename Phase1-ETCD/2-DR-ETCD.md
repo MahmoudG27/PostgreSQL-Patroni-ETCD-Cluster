@@ -122,7 +122,9 @@ etcdctl version
 
 ```bash
 sudo useradd -r -s /usr/sbin/nologin etcd
-sudo chown -R etcd:etcd /var/lib/etcd
+sudo chown -R root:etcd /etc/etcd
+sudo chmod 750 /etc/etcd
+sudo chmod 640 /etc/etcd/etcd.conf.yml
 ```
 
 ---
@@ -201,13 +203,13 @@ data-dir: /var/lib/etcd
 initial-advertise-peer-urls: http://<NODE_IP>:2380
 listen-peer-urls: http://<NODE_IP>:2380
 
-listen-client-urls: http://<NODE_IP>:2379,[http://127.0.0.1:2379](http://127.0.0.1:2379)
+listen-client-urls: http://<NODE_IP>:2379,http://127.0.0.1:2379
 advertise-client-urls: http://<NODE_IP>:2379
 
 # This line remains EXACTLY the same on all 5 nodes
-initial-cluster: dr-node-01=[http://10.1.0.4:2380](http://10.1.0.4:2380),dr-node-02=[http://10.1.0.5:2380](http://10.1.0.5:2380),dr-node-03=[http://10.1.0.6:2380](http://10.1.0.6:2380),dr-node-04=[http://10.1.0.7:2380](http://10.1.0.7:2380),dr-node-05=[http://10.1.0.8:2380](http://10.1.0.8:2380)
+initial-cluster: dr-node-01=http://10.1.0.4:2380,dr-node-02=http://10.1.0.5:2380,dr-node-03=http://10.1.0.6:2380,dr-node-04=http://10.1.0.7:2380,dr-node-05=http://10.1.0.8:2380
 
-initial-cluster-token: pg-etcd-cluster
+initial-cluster-token: pg-etcd-dr-cluster
 initial-cluster-state: new
 ```
 
@@ -215,7 +217,7 @@ Example for Node 1: Replace <NODE_NAME> with dr-node-01 and <NODE_IP> with 10.1.
 
 ---
 
-# 11. Create the systemd Service
+# 7. Create the systemd Service
 
 Create the service file on **all VMs**:
 
@@ -252,6 +254,8 @@ After=network.target
 
 [Service]
 Type=notify
+User=etcd
+Group=etcd
 ExecStart=/usr/local/bin/etcd --config-file /etc/etcd/etcd.conf.yml
 Restart=always
 RestartSec=5
@@ -263,7 +267,7 @@ EOF
 
 ---
 
-# 12. Start etcd
+# 8. Start etcd
 
 Reload systemd:
 
@@ -291,9 +295,9 @@ Active: active (running)
 
 ---
 
-# 13. Important: Start All Nodes Together
+# 9. Important: Start All Nodes Together
 
-For the initial cluster creation, start the etcd services on the **five VMs at approximately the same time**.
+Start all five members using the same initial-cluster configuration. They may be started sequentially or in parallel, provided network connectivity between all members is available.
 
 The five nodes are:
 
@@ -309,7 +313,7 @@ This helps avoid initial cluster formation and connection issues.
 
 ---
 
-# 14. Verify the etcd Cluster
+# 10. Verify the etcd Cluster
 
 From any node, run:
 
@@ -346,7 +350,7 @@ Example:
 
 ---
 
-# 15. Verify Cluster Membership
+# 11. Verify Cluster Membership
 
 You can also check the members using:
 
@@ -369,7 +373,7 @@ dr-node-05
 
 ---
 
-# 16. Troubleshooting
+# 12. Troubleshooting
 
 ## Check etcd service
 
@@ -427,7 +431,7 @@ Repeat for the other nodes if necessary.
 
 ---
 
-# 17. Final Checklist
+# 13. Final Checklist
 
 Before moving to the next stage of the PostgreSQL cluster setup, verify:
 
@@ -449,7 +453,7 @@ Before moving to the next stage of the PostgreSQL cluster setup, verify:
 
 ---
 
-# 18. Quick Verification Command
+# 14. Quick Verification Command
 
 The main command to verify the cluster is:
 
