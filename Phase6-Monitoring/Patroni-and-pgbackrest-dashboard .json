@@ -1,0 +1,259 @@
+{
+  "title": "PostgreSQL HA/DR — Patroni & pgBackRest",
+  "uid": "patroni-pgbackrest",
+  "tags": ["postgresql", "patroni", "pgbackrest", "ha-dr"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Data source",
+        "current": {}
+      },
+      {
+        "name": "site",
+        "type": "custom",
+        "label": "Site",
+        "query": "hq,dr",
+        "current": { "text": "hq", "value": "hq" },
+        "includeAll": true,
+        "multi": false
+      }
+    ]
+  },
+
+  "panels": [
+    {
+      "type": "row",
+      "title": "Patroni Cluster Status",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "collapsed": false,
+      "panels": []
+    },
+
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Current Primary",
+      "description": "Which node is currently reporting as Patroni leader/primary for the selected site.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 1 },
+      "targets": [
+        {
+          "expr": "patroni_master{site=\"$site\"} == 1",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "name",
+        "colorMode": "background"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          },
+          "noValue": "NO PRIMARY — CHECK IMMEDIATELY"
+        }
+      }
+    },
+
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Patroni Nodes Reachable",
+      "description": "How many nodes in the selected site are responding on the Patroni REST API (8008).",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 1 },
+      "targets": [
+        {
+          "expr": "sum(up{job=~\"patroni_hq|patroni_dr\", site=\"$site\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 2 },
+              { "color": "green", "value": 3 }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "etcd Quorum",
+      "description": "1 = the etcd cluster in this site currently has a leader (quorum is healthy).",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 1 },
+      "targets": [
+        {
+          "expr": "max(etcd_server_has_leader{site=\"$site\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "NO QUORUM", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "HEALTHY", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      }
+    },
+
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Replication Lag Over Time",
+      "description": "Replication lag (bytes) reported by each replica in the selected site.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 1 },
+      "targets": [
+        {
+          "expr": "patroni_replication_lag_bytes{site=\"$site\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+
+    {
+      "type": "row",
+      "title": "pgBackRest — Backup & WAL Health",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "id": 101,
+      "collapsed": false,
+      "panels": []
+    },
+
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Stanza Status",
+      "description": "pgBackRest's own reported health for the stanza (1 = OK).",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 10 },
+      "targets": [
+        {
+          "expr": "pgbackrest_stanza_status{site=\"$site\"}",
+          "legendFormat": "{{stanza}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "UNHEALTHY", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "OK", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      }
+    },
+
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Last Full Backup Age",
+      "description": "Time since the last completed backup. Alert threshold is 8 days (weekly schedule).",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 10 },
+      "targets": [
+        {
+          "expr": "pgbackrest_backup_age_seconds{site=\"$site\"}",
+          "legendFormat": "{{stanza}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 604800 },
+              { "color": "red", "value": 691200 }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "WAL Archiving Freshness",
+      "description": "Time since the most recently archived WAL segment. Should normally stay low (minutes).",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 10 },
+      "targets": [
+        {
+          "expr": "time() - pgbackrest_last_wal_archived_timestamp_seconds{site=\"$site\"}",
+          "legendFormat": "{{stanza}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1800 },
+              { "color": "red", "value": 3600 }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Backup Monitoring Check",
+      "description": "1 = the pgbackrest_metrics.sh check script itself failed to run (stale data warning).",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 10 },
+      "targets": [
+        {
+          "expr": "pgbackrest_check_failed{site=\"$site\"}",
+          "legendFormat": "{{stanza}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "OK", "color": "green" } } },
+            { "type": "value", "options": { "1": { "text": "CHECK FAILING", "color": "red" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      }
+    }
+  ]
+}

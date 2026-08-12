@@ -719,6 +719,7 @@ Or managed using Patroni's permanent replication slot mechanism where appropriat
 However, there is an important Patroni 4.1.4 limitation:
 
 > When replication slots are used by a Standby Cluster, `pg_rewind` may fail on that Standby Cluster.
+> `pg_rewind` only fails in one case in particular: if standby_cluster.host is consulting on one node and it is the same as Standby/Replica (meaning you cascade from standby and not directly from the real primary).
 
 Therefore, do not design the recovery procedure around the assumption that:
 
