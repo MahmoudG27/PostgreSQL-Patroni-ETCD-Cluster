@@ -1,130 +1,99 @@
+# my global config
 global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
+  scrape_interval: 15s # Set the scrape interval to every 15 seconds. Default is every 1 minute.
+  evaluation_interval: 15s # Evaluate rules every 15 seconds. The default is every 1 minute.
+  # scrape_timeout is set to the global default (10s).
 
+# Alertmanager configuration
 alerting:
   alertmanagers:
     - static_configs:
         - targets:
-            - "localhost:9093"
+          - alertmanager:9093
 
+# Load rules once and periodically evaluate them according to the global 'evaluation_interval'.
 rule_files:
-  - "/etc/prometheus/rules/*.yml"
+  - "alert_rules.yml"
 
+# A scrape configuration containing exactly one endpoint to scrape:
+# Here it's Prometheus itself.
 scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
 
-  # ---------------------------------------------------------------
-  # node_exporter — OS-level metrics (CPU, RAM, disk, network)
-  # One instance on every VM in both sites (port 9100).
-  # ---------------------------------------------------------------
   - job_name: "node_exporter_hq"
     static_configs:
       - targets:
-          - "10.0.0.4:9100"   # pg-node1
-          - "10.0.0.5:9100"   # pg-node2
-          - "10.0.0.6:9100"   # pg-node3
-          - "10.0.0.100:9100" # haproxy-hq
-          - "10.0.0.20:9100"  # monitoring-hq
-          - "10.0.0.30:9100"  # backup-hq (also exposes pgbackrest_* via textfile collector)
+          - "10.0.0.4:9100"
+          - "10.0.0.5:9100"
+          - "10.0.0.6:9100"
+          - "10.0.0.20:9100"
+          - "10.0.0.30:9100"
+          - "10.0.0.100:9100"
         labels:
           site: "hq"
 
   - job_name: "node_exporter_dr"
     static_configs:
       - targets:
-          - "10.1.0.4:9100"   # pg-node1
-          - "10.1.0.5:9100"   # pg-node2
-          - "10.1.0.6:9100"   # pg-node3
-          - "10.1.0.100:9100" # haproxy-dr
-          - "10.1.0.20:9100"  # monitoring-dr
-          - "10.1.0.30:9100"  # backup-dr (also exposes pgbackrest_* via textfile collector)
+          - "10.1.0.4:9100"
+          - "10.1.0.5:9100"
+          - "10.1.0.6:9100"
+          - "10.1.0.20:9100"
+          - "10.1.0.30:9100"
+          - "10.1.0.100:9100"
         labels:
           site: "dr"
 
-  # ---------------------------------------------------------------
-  # postgres_exporter — PostgreSQL internals (connections, locks,
-  # transactions, table/index stats). Only on the PostgreSQL nodes.
-  # ---------------------------------------------------------------
   - job_name: "postgres_exporter_hq"
     static_configs:
-      - targets:
-          - "10.0.0.4:9187"
-          - "10.0.0.5:9187"
-          - "10.0.0.6:9187"
+      - targets: ["10.0.0.4:9187", "10.0.0.5:9187", "10.0.0.6:9187"]
         labels:
           site: "hq"
 
   - job_name: "postgres_exporter_dr"
     static_configs:
-      - targets:
-          - "10.1.0.4:9187"
-          - "10.1.0.5:9187"
-          - "10.1.0.6:9187"
+      - targets: ["10.1.0.4:9187", "10.1.0.5:9187", "10.1.0.6:9187"]
         labels:
           site: "dr"
 
-  # ---------------------------------------------------------------
-  # Patroni — built-in /metrics endpoint (no separate exporter
-  # needed). Reports cluster role, replication lag, TL, etc.
-  # ---------------------------------------------------------------
-  - job_name: "patroni_hq"
-    metrics_path: /metrics
+  - job_name: "haproxy_exporter_hq"
     static_configs:
-      - targets:
-          - "10.0.0.4:8008"
-          - "10.0.0.5:8008"
-          - "10.0.0.6:8008"
+      - targets: ["10.0.0.100:9101"]
         labels:
           site: "hq"
 
-  - job_name: "patroni_dr"
-    metrics_path: /metrics
+  - job_name: "haproxy_exporter_dr"
     static_configs:
-      - targets:
-          - "10.1.0.4:8008"
-          - "10.1.0.5:8008"
-          - "10.1.0.6:8008"
+      - targets: ["10.1.0.100:9101"]
         labels:
           site: "dr"
 
-  # ---------------------------------------------------------------
-  # etcd — built-in /metrics endpoint (no separate exporter
-  # needed). Reports quorum/leader status, Raft health.
-  # ---------------------------------------------------------------
   - job_name: "etcd_hq"
     metrics_path: /metrics
     static_configs:
-      - targets:
-          - "10.0.0.4:2379"
-          - "10.0.0.5:2379"
-          - "10.0.0.6:2379"
+      - targets: ["10.0.0.4:2379", "10.0.0.5:2379", "10.0.0.6:2379"]
         labels:
           site: "hq"
 
   - job_name: "etcd_dr"
     metrics_path: /metrics
     static_configs:
-      - targets:
-          - "10.1.0.4:2379"
-          - "10.1.0.5:2379"
-          - "10.1.0.6:2379"
+      - targets: ["10.1.0.4:2379", "10.1.0.5:2379", "10.1.0.6:2379"]
         labels:
           site: "dr"
 
-  # ---------------------------------------------------------------
-  # haproxy_exporter — translates the HAProxy stats page (port 8404,
-  # /stats endpoint we added) into Prometheus format.
-  # ---------------------------------------------------------------
-  - job_name: "haproxy_exporter_hq"
+  - job_name: "patroni_hq"
+    metrics_path: /metrics
     static_configs:
-      - targets:
-          - "10.0.0.100:9101"
+      - targets: ["10.0.0.4:8008", "10.0.0.5:8008", "10.0.0.6:8008"]
         labels:
           site: "hq"
 
-  - job_name: "haproxy_exporter_dr"
+  - job_name: "patroni_dr"
+    metrics_path: /metrics
     static_configs:
-      - targets:
-          - "10.1.0.100:9101"
+      - targets: ["10.1.0.4:8008", "10.1.0.5:8008", "10.1.0.6:8008"]
         labels:
           site: "dr"
