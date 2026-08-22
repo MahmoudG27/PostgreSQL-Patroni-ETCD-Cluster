@@ -40,7 +40,7 @@ The monitoring setup exposes these metrics:
 | `pgbackrest_last_backup_timestamp_seconds`      | Timestamp of the latest completed backup         |
 | `pgbackrest_backup_age_seconds`                 | Age of the latest backup                         |
 | `pgbackrest_stanza_status`                      | Health of the pgBackRest stanza                  |
-| `pgbackrest_last_wal_archive_timestamp_seconds` | Modification time of the latest WAL archive file |
+| `pgbackrest_last_wal_archived_timestamp_seconds` | Modification time of the latest WAL archive file |
 | `pgbackrest_repository_size_bytes`              | Current size of the local pgBackRest repository  |
 
 ---
@@ -160,9 +160,9 @@ PG_BACKREST_EXIT=$?
 if [ ${PG_BACKREST_EXIT} -eq 0 ] && [ -n "${JSON}" ]; then
 
     # Stanza status
-    STATUS=$(echo "${JSON}" | jq -r '.[0].status // "unknown"')
+    STATUS_CODE=$(echo "${JSON}" | jq -r '.[0].status.code // 1')
 
-    if [ "${STATUS}" = "ok" ]; then
+    if [ "${STATUS_CODE}" = "0" ]; then
         STANZA_STATUS=1
     else
         STANZA_STATUS=0
@@ -198,32 +198,15 @@ if [ ${PG_BACKREST_EXIT} -eq 0 ] && [ -n "${JSON}" ]; then
 fi
 
 # ------------------------------------------------------------
-# Find the latest WAL archive
-#
-# This assumes a local filesystem repository:
-# /var/lib/pgbackrest/archive/
-#
-# The timestamp represents the filesystem modification time
-# of the newest WAL archive file.
+# Latest WAL archive (Extracted directly from pgBackRest JSON)
 # ------------------------------------------------------------
 
-if [ -d "${REPOSITORY}/archive" ]; then
+LAST_WAL_TS=$(echo "${JSON}" | jq -r '
+    .[0].archive[0].timestamp.stop // 0
+')
 
-    LATEST_WAL_FILE=$(find "${REPOSITORY}/archive" \
-        -type f \
-        -printf '%T@ %p\n' 2>/dev/null \
-        | sort -n \
-        | tail -1 \
-        | cut -d' ' -f2-)
-
-    if [ -n "${LATEST_WAL_FILE}" ] &&
-       [ -f "${LATEST_WAL_FILE}" ]; then
-
-        LAST_WAL_ARCHIVE_TIMESTAMP=$(stat \
-            -c '%Y' \
-            "${LATEST_WAL_FILE}" 2>/dev/null || echo 0)
-    fi
-
+if ! [[ "${LAST_WAL_TS}" =~ ^[0-9]+$ ]]; then
+    LAST_WAL_TS=0
 fi
 
 # ------------------------------------------------------------
@@ -263,9 +246,9 @@ pgbackrest_backup_age_seconds{stanza="${STANZA}"} ${LAST_BACKUP_AGE}
 # TYPE pgbackrest_stanza_status gauge
 pgbackrest_stanza_status{stanza="${STANZA}"} ${STANZA_STATUS}
 
-# HELP pgbackrest_last_wal_archive_timestamp_seconds Filesystem modification timestamp of the latest WAL archive file.
-# TYPE pgbackrest_last_wal_archive_timestamp_seconds gauge
-pgbackrest_last_wal_archive_timestamp_seconds{stanza="${STANZA}"} ${LAST_WAL_ARCHIVE_TIMESTAMP}
+# HELP pgbackrest_last_wal_archived_timestamp_seconds Filesystem modification timestamp of the latest WAL archive file.
+# TYPE pgbackrest_last_wal_archived_timestamp_seconds gauge
+pgbackrest_last_wal_archived_timestamp_seconds{stanza="${STANZA}"} ${LAST_WAL_ARCHIVE_TIMESTAMP}
 
 # HELP pgbackrest_repository_size_bytes Size of the local pgBackRest repository in bytes.
 # TYPE pgbackrest_repository_size_bytes gauge
@@ -322,9 +305,9 @@ pgbackrest_backup_age_seconds{stanza="pg_cluster_hq"} 123456
 # TYPE pgbackrest_stanza_status gauge
 pgbackrest_stanza_status{stanza="pg_cluster_hq"} 1
 
-# HELP pgbackrest_last_wal_archive_timestamp_seconds Filesystem modification timestamp of the latest WAL archive file.
-# TYPE pgbackrest_last_wal_archive_timestamp_seconds gauge
-pgbackrest_last_wal_archive_timestamp_seconds{stanza="pg_cluster_hq"} 1784509000
+# HELP pgbackrest_last_wal_archived_timestamp_seconds Filesystem modification timestamp of the latest WAL archive file.
+# TYPE pgbackrest_last_wal_archived_timestamp_seconds gauge
+pgbackrest_last_wal_archived_timestamp_seconds{stanza="pg_cluster_hq"} 1784509000
 
 # HELP pgbackrest_repository_size_bytes Size of the local pgBackRest repository in bytes.
 # TYPE pgbackrest_repository_size_bytes gauge
@@ -348,7 +331,7 @@ pgbackrest_backup_success
 pgbackrest_last_backup_timestamp_seconds
 pgbackrest_backup_age_seconds
 pgbackrest_stanza_status
-pgbackrest_last_wal_archive_timestamp_seconds
+pgbackrest_last_wal_archived_timestamp_seconds
 pgbackrest_repository_size_bytes
 ```
 
@@ -599,7 +582,7 @@ groups:
 
       - alert: PgBackRestWalArchiveStale
         expr: |
-          time() - pgbackrest_last_wal_archive_timestamp_seconds{stanza="pg_cluster_hq"} > 30 * 60
+          time() - pgbackrest_last_wal_archived_timestamp_seconds{stanza="pg_cluster_hq"} > 30 * 60
         for: 15m
 
         labels:
@@ -758,7 +741,7 @@ pgbackrest_backup_success
 pgbackrest_last_backup_timestamp_seconds
 pgbackrest_backup_age_seconds
 pgbackrest_stanza_status
-pgbackrest_last_wal_archive_timestamp_seconds
+pgbackrest_last_wal_archived_timestamp_seconds
 pgbackrest_repository_size_bytes
 ```
 

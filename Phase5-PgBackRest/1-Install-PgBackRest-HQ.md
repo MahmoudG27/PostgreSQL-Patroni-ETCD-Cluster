@@ -100,7 +100,48 @@ This helps reduce the backup impact on the Primary PostgreSQL node.
 
 # 3. Install pgBackRest
 
-## 3.1 PostgreSQL Nodes
+## 3.1 Add the PGDG Repository
+
+pgBackRest must be the **same version** on the PostgreSQL nodes and on the Backup Server.
+
+If one machine installs pgBackRest from the default Ubuntu repository and another installs it from PGDG, the versions will differ and pgBackRest will refuse to communicate between them.
+
+To avoid this, add the official PostgreSQL (PGDG) APT repository on **every PostgreSQL node and on the Backup Server** before installing anything.
+
+Install the prerequisites:
+
+```bash
+sudo apt-get install -y curl ca-certificates lsb-release
+```
+
+Import the PGDG signing key:
+
+```bash
+sudo install -d /usr/share/postgresql-common/pgdg
+sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+```
+
+Add the repository:
+
+```bash
+sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+```
+
+Update the package index:
+
+```bash
+sudo apt update
+```
+
+Confirm that pgBackRest will be installed from PGDG:
+
+```bash
+apt-cache policy pgbackrest
+```
+
+---
+
+## 3.2 PostgreSQL Nodes
 
 Install pgBackRest on all PostgreSQL nodes.
 
@@ -124,11 +165,21 @@ hq-node-05
 
 # 4. Install pgBackRest on the Backup Server
 
+Make sure the PGDG repository from **3.1** has already been added on this machine, otherwise the Backup Server will install a different pgBackRest version than the PostgreSQL nodes.
+
 On the dedicated Backup Server:
 
 ```bash
 sudo apt install -y pgbackrest jq
 ```
+
+Verify that the version matches the PostgreSQL nodes:
+
+```bash
+pgbackrest version
+```
+
+The same version must be reported on the Backup Server and on every PostgreSQL node.
 
 Create the backup repository directory:
 
@@ -374,16 +425,20 @@ postgres:postgres
 The Backup Server needs the main pgBackRest configuration:
 
 ```text
-/etc/pgbackrest/pgbackrest.conf
+/etc/pgbackrest.conf
 ```
 
 Create it:
 
 ```bash
-sudo tee /etc/pgbackrest/pgbackrest.conf > /dev/null <<'EOF'
+sudo tee /etc/pgbackrest.conf > /dev/null <<'EOF'
 [global]
 repo1-path=/var/lib/pgbackrest
 backup-standby=y
+repo1-retention-full=4
+repo1-retention-full-type=count
+repo1-retention-archive-type=full
+repo1-retention-archive=1
 
 [pg_cluster_hq]
 pg1-host=10.0.0.4
@@ -443,6 +498,32 @@ All nodes use:
 
 as their PostgreSQL data directory.
 
+## Retention
+
+The retention settings control how many backups are kept before pgBackRest expires the old ones:
+
+```ini
+repo1-retention-full=4
+repo1-retention-full-type=count
+repo1-retention-archive-type=full
+repo1-retention-archive=1
+```
+
+These mean:
+
+```text
+repo1-retention-full=4            keep the last 4 full backups
+repo1-retention-full-type=count   count backups, not days
+repo1-retention-archive-type=full retain WAL relative to full backups
+repo1-retention-archive=1         keep WAL for the most recent full backup
+```
+
+With a weekly full backup, keeping 4 full backups gives roughly one month of backup history.
+
+Without retention settings, pgBackRest never expires anything and the repository grows until the Backup Server runs out of disk.
+
+Expiration runs automatically at the end of each `backup` command.
+
 ---
 
 # 16. pgBackRest Configuration — PostgreSQL Nodes
@@ -452,13 +533,13 @@ The PostgreSQL nodes need their own pgBackRest configuration.
 Create:
 
 ```text
-/etc/pgbackrest/pgbackrest.conf
+/etc/pgbackrest.conf
 ```
 
 with:
 
 ```bash
-sudo tee /etc/pgbackrest/pgbackrest.conf > /dev/null <<'EOF'
+sudo tee /etc/pgbackrest.conf > /dev/null <<'EOF'
 [global]
 repo1-host=10.0.0.30
 repo1-host-user=postgres
@@ -490,43 +571,11 @@ postgres
 
 ---
 
-# 17. Create the pgBackRest Stanza
+# 17. Configure PostgreSQL WAL Archiving
 
-The stanza identifies the PostgreSQL cluster to pgBackRest.
+WAL archiving must be enabled **before** the stanza is created.
 
-Run this command **on the Backup Server**:
-
-```bash
-sudo -u postgres pgbackrest \
-  --stanza=pg_cluster_hq \
-  stanza-create
-```
-
-The stanza is:
-
-```text
-pg_cluster_hq
-```
-
----
-
-# 18. Verify the Stanza
-
-After creating the stanza:
-
-```bash
-sudo -u postgres pgbackrest \
-  --stanza=pg_cluster_hq \
-  check
-```
-
-The `check` command verifies the pgBackRest configuration and connectivity.
-
-If there are SSH, PostgreSQL, or configuration problems, fix them before scheduling backups.
-
----
-
-# 19. Configure PostgreSQL WAL Archiving
+`stanza-create` and `check` both validate the PostgreSQL archive settings and push a test WAL segment. If `archive_mode` and `archive_command` are not configured yet, these commands fail.
 
 pgBackRest needs PostgreSQL WAL files to support:
 
@@ -554,9 +603,28 @@ postgresql:
 
 Because Patroni manages PostgreSQL, these parameters should be configured through the Patroni configuration rather than manually modifying the generated PostgreSQL configuration.
 
+> **Note**
+>
+> After editing `/etc/patroni/patroni.yml`, the cluster must be restarted for the pgBackRest changes to be applied.
+>
+> `archive_mode` is a restart-only parameter, so a reload is not enough.
+
+Restart the cluster:
+
+```bash
+sudo /opt/patroni/bin/patronictl -c /etc/patroni/patroni.yml restart pg_cluster_hq
+```
+
+Confirm that archiving is active before continuing:
+
+```bash
+sudo -u postgres psql -c "SHOW archive_mode;"
+sudo -u postgres psql -c "SHOW archive_command;"
+```
+
 ---
 
-# 20. WAL Archiving Flow
+# 18. WAL Archiving Flow
 
 The WAL flow becomes:
 
@@ -582,6 +650,42 @@ This gives the backup infrastructure a continuous stream of archived WAL files.
 
 ---
 
+# 19. Create the pgBackRest Stanza
+
+The stanza identifies the PostgreSQL cluster to pgBackRest.
+
+Run this command **on the Backup Server**:
+
+```bash
+sudo -u postgres pgbackrest \
+  --stanza=pg_cluster_hq \
+  stanza-create
+```
+
+The stanza is:
+
+```text
+pg_cluster_hq
+```
+
+---
+
+# 20. Verify the Stanza
+
+After creating the stanza:
+
+```bash
+sudo -u postgres pgbackrest \
+  --stanza=pg_cluster_hq \
+  check
+```
+
+The `check` command verifies the pgBackRest configuration and connectivity.
+
+If there are SSH, PostgreSQL, or configuration problems, fix them before scheduling backups.
+
+---
+
 # 21. Weekly Full Backup
 
 A weekly full backup can be scheduled on the Backup Server.
@@ -596,7 +700,7 @@ Every Sunday
 Cron expression:
 
 ```cron
-0 2 * * 0
+0 2 * * 5
 ```
 
 ---
@@ -612,7 +716,7 @@ sudo -u postgres crontab -e
 Add:
 
 ```cron
-0 2 * * 0 pgbackrest --stanza=pg_cluster_hq --type=full backup
+0 2 * * 5 pgbackrest --stanza=pg_cluster_hq --type=full backup
 ```
 
 This means:
@@ -640,10 +744,7 @@ Before relying on cron, run a full backup manually.
 On the Backup Server:
 
 ```bash
-sudo -u postgres pgbackrest \
-  --stanza=pg_cluster_hq \
-  --type=full \
-  backup
+sudo -u postgres pgbackrest --stanza=pg_cluster_hq --type=full --log-level-console=info backup 
 ```
 
 This may take some time depending on:
@@ -801,20 +902,24 @@ The complete HQ environment:
 
 After configuring pgBackRest:
 
+* [ ] PGDG repository added on all PostgreSQL nodes and on the Backup Server.
 * [ ] pgBackRest installed on all PostgreSQL nodes.
 * [ ] pgBackRest installed on Backup Server.
+* [ ] `pgbackrest version` reports the same version on all machines.
 * [ ] `/var/lib/pgbackrest` exists.
 * [ ] Backup repository is owned by `postgres`.
 * [ ] `postgres` user exists on Backup Server.
 * [ ] SSH keys are configured.
 * [ ] Backup Server can SSH to every PostgreSQL node.
 * [ ] PostgreSQL nodes can SSH to Backup Server if reverse access is required.
-* [ ] `/etc/pgbackrest/pgbackrest.conf` exists on Backup Server.
+* [ ] `/etc/pgbackrest.conf` exists on Backup Server.
+* [ ] Retention settings are configured in the `[global]` section.
 * [ ] PostgreSQL node pgBackRest configuration points to `10.0.0.30`.
-* [ ] `pg_cluster_hq` stanza has been created.
-* [ ] `pgbackrest check` succeeds.
 * [ ] `archive_mode` is enabled.
 * [ ] `archive_command` uses `pgbackrest archive-push`.
+* [ ] PostgreSQL has been restarted so `archive_mode` is active.
+* [ ] `pg_cluster_hq` stanza has been created.
+* [ ] `pgbackrest check` succeeds.
 * [ ] WAL archiving is working.
 * [ ] Manual full backup succeeds.
 * [ ] `pgbackrest info` shows the backup.

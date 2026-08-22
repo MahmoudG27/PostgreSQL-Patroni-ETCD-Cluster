@@ -48,8 +48,8 @@
       "gridPos": { "h": 8, "w": 6, "x": 0, "y": 1 },
       "targets": [
         {
-          "expr": "patroni_master{site=\"$site\"} == 1",
-          "legendFormat": "{{instance}}",
+          "expr": "patroni_primary{site=\"$site\"} == 1",
+          "legendFormat": "{{name}}",
           "refId": "A"
         }
       ],
@@ -126,17 +126,21 @@
       "id": 4,
       "type": "timeseries",
       "title": "Replication Lag Over Time",
-      "description": "Replication lag (bytes) reported by each replica in the selected site.",
+      "description": "Replication lag in seconds reported by each replica in the selected site.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 6, "x": 18, "y": 1 },
       "targets": [
         {
-          "expr": "patroni_replication_lag_bytes{site=\"$site\"}",
+          "expr": "(time() - patroni_xlog_replayed_timestamp{site=\"$site\"}) and (patroni_replica{site=\"$site\"} == 1)",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "bytes" } }
+      "fieldConfig": { 
+        "defaults": { 
+          "unit": "s" 
+        } 
+      }
     },
 
     {
@@ -211,7 +215,7 @@
       "gridPos": { "h": 8, "w": 6, "x": 12, "y": 10 },
       "targets": [
         {
-          "expr": "time() - pgbackrest_last_wal_archived_timestamp_seconds{site=\"$site\"}",
+          "expr": "time() - pgbackrest_last_wal_archive_timestamp_seconds{site=\"$site\"}",
           "legendFormat": "{{stanza}}",
           "refId": "A"
         }
@@ -240,7 +244,7 @@
       "gridPos": { "h": 8, "w": 6, "x": 18, "y": 10 },
       "targets": [
         {
-          "expr": "pgbackrest_check_failed{site=\"$site\"}",
+          "expr": "pgbackrest_backup_success{site=\"$site\"}",
           "legendFormat": "{{stanza}}",
           "refId": "A"
         }
@@ -248,8 +252,8 @@
       "fieldConfig": {
         "defaults": {
           "mappings": [
-            { "type": "value", "options": { "0": { "text": "OK", "color": "green" } } },
-            { "type": "value", "options": { "1": { "text": "CHECK FAILING", "color": "red" } } }
+            { "type": "value", "options": { "1": { "text": "OK", "color": "green" } } },
+            { "type": "value", "options": { "0": { "text": "CHECK FAILING", "color": "red" } } }
           ],
           "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
         }

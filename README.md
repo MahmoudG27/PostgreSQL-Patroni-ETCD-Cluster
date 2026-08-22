@@ -78,3 +78,8 @@ echo "pgbackrest_last_backup_timestamp $(date +%s)" >> /var/lib/node_exporter/te
 
 2. Enable this feature in the node_exporter of the Backup VM only (flag --collector.textfile.directory)
 # Note: This is not a new, separate exporter - it is an additional use of the same node_exporter that already exists on the Backup VM.
+
+
+# Notes 
+1) change the name of STANZA script for monitoing Backup
+

@@ -23,10 +23,12 @@ bootstrap:
     synchronous_mode: true
     synchronous_mode_strict: false
     synchronous_node_count: 1
+
     standby_cluster:
       host: 10.0.0.100
       port: 5432
       primary_slot_name: dr_standby_slot
+
     postgresql:
       use_pg_rewind: true
       use_slots: true
@@ -36,6 +38,7 @@ bootstrap:
         max_wal_senders: 10
         max_replication_slots: 10
         wal_keep_size: 128MB
+        max_slot_wal_keep_size: 50GB
 
   initdb:
     - encoding: UTF8
@@ -43,8 +46,9 @@ bootstrap:
 
   pg_hba:
     - host replication replicator 10.1.0.0/24 md5
+    - host replication replicator 10.0.0.0/24 md5
     - host all all 10.1.0.0/24 md5
-    - host all all local trust
+    - local all all trust
 
 postgresql:
   listen: 10.1.0.4:5432

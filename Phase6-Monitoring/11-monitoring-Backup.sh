@@ -98,9 +98,9 @@ pgbackrest_backup_age_seconds{stanza="${STANZA}"} 0
 # TYPE pgbackrest_backup_count gauge
 pgbackrest_backup_count{stanza="${STANZA}"} 0
 
-# HELP pgbackrest_last_wal_archived_timestamp_seconds Unix timestamp of the newest WAL archive file.
-# TYPE pgbackrest_last_wal_archived_timestamp_seconds gauge
-pgbackrest_last_wal_archived_timestamp_seconds{stanza="${STANZA}"} 0
+# HELP pgbackrest_last_wal_archive_timestamp_seconds Unix timestamp of the newest WAL archive file.
+# TYPE pgbackrest_last_wal_archive_timestamp_seconds gauge
+pgbackrest_last_wal_archive_timestamp_seconds{stanza="${STANZA}"} 0
 EOF
 
     chown node_exporter:node_exporter "${TMP_FILE}"
@@ -113,9 +113,9 @@ fi
 # Stanza status
 # ------------------------------------------------------------
 
-STATUS=$(echo "${JSON}" | jq -r '.[0].status // "unknown"')
+STATUS_CODE=$(echo "${JSON}" | jq -r '.[0].status.code // 1')
 
-if [ "${STATUS}" = "ok" ]; then
+if [ "${STATUS_CODE}" = "0" ]; then
     STANZA_STATUS=1
 else
     STANZA_STATUS=0
@@ -173,27 +173,15 @@ if [ "${STANZA_STATUS}" -eq 1 ] &&
 fi
 
 # ------------------------------------------------------------
-# Latest WAL archive
-#
-# pgBackRest JSON provides the latest WAL name.
-# The filesystem mtime is used as the timestamp.
+# Latest WAL archive (Extracted directly from pgBackRest JSON)
 # ------------------------------------------------------------
 
-LAST_WAL_FILE=$(find \
-    "/var/lib/pgbackrest/archive/${STANZA}" \
-    -type f \
-    -printf '%T@ %p\n' 2>/dev/null \
-    | sort -n \
-    | tail -n 1 \
-    | cut -d' ' -f2-)
+LAST_WAL_TS=$(echo "${JSON}" | jq -r '
+    .[0].archive[0].timestamp.stop // 0
+')
 
-if [ -n "${LAST_WAL_FILE}" ] &&
-   [ -f "${LAST_WAL_FILE}" ]; then
-
-    LAST_WAL_TS=$(stat \
-        -c %Y \
-        "${LAST_WAL_FILE}" 2>/dev/null || echo 0)
-
+if ! [[ "${LAST_WAL_TS}" =~ ^[0-9]+$ ]]; then
+    LAST_WAL_TS=0
 fi
 
 # ------------------------------------------------------------
@@ -225,9 +213,9 @@ pgbackrest_backup_age_seconds{stanza="${STANZA}"} ${BACKUP_AGE}
 # TYPE pgbackrest_backup_count gauge
 pgbackrest_backup_count{stanza="${STANZA}"} ${BACKUP_COUNT}
 
-# HELP pgbackrest_last_wal_archived_timestamp_seconds Unix timestamp of the newest WAL archive file.
-# TYPE pgbackrest_last_wal_archived_timestamp_seconds gauge
-pgbackrest_last_wal_archived_timestamp_seconds{stanza="${STANZA}"} ${LAST_WAL_TS}
+# HELP pgbackrest_last_wal_archive_timestamp_seconds Unix timestamp of the newest WAL archive file.
+# TYPE pgbackrest_last_wal_archive_timestamp_seconds gauge
+pgbackrest_last_wal_archive_timestamp_seconds{stanza="${STANZA}"} ${LAST_WAL_TS}
 EOF
 
 # ------------------------------------------------------------
@@ -256,7 +244,7 @@ pgbackrest_backup_success
 pgbackrest_last_backup_timestamp_seconds
 pgbackrest_backup_age_seconds
 pgbackrest_backup_count
-pgbackrest_last_wal_archived_timestamp_seconds
+pgbackrest_last_wal_archive_timestamp_seconds
 
 # 8. Run the script automatically:
 # We prefer use systemd timer instead cron here because it is monitoring job.

@@ -122,9 +122,6 @@ etcdctl version
 
 ```bash
 sudo useradd -r -s /usr/sbin/nologin etcd
-sudo chown -R root:etcd /etc/etcd
-sudo chmod 750 /etc/etcd
-sudo chmod 640 /etc/etcd/etcd.conf.yml
 ```
 
 ---
@@ -214,6 +211,16 @@ initial-cluster-state: new
 ```
 
 Example for Node 1: Replace <NODE_NAME> with dr-node-01 and <NODE_IP> with 10.1.0.4.
+
+Set the right permissions to directory and conf etcd file
+
+```bash
+sudo chown -R root:etcd /etc/etcd
+sudo chmod 750 /etc/etcd
+sudo chmod 640 /etc/etcd/etcd.conf.yml
+sudo chown -R etcd:etcd /var/lib/etcd
+sudo chmod 700 /var/lib/etcd
+```
 
 ---
 
