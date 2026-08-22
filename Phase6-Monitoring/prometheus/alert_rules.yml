@@ -6,23 +6,48 @@ groups:
   - name: patroni_alerts
     rules:
 
+      # HQ elects a primary; DR is a standby cluster and elects a standby_leader.
+      # Both count as "the cluster has a leader", so sum them together.
       - alert: PatroniNoLeader
-        expr: sum by (site) (patroni_master) == 0
+        expr: >
+          sum by (site, scope) (patroni_primary)
+          + sum by (site, scope) (patroni_standby_leader)
+          == 0
         for: 30s
         labels:
           severity: critical
         annotations:
-          summary: "No Patroni leader in site {{ $labels.site }}"
-          description: "No node is currently reporting as primary/leader for more than 30s. Writes are likely unavailable."
+          summary: "No Patroni leader in cluster {{ $labels.scope }} ({{ $labels.site }})"
+          description: "No node is currently reporting as primary or standby_leader for more than 30s. Writes are likely unavailable."
 
+      - alert: PatroniSplitBrain
+        expr: sum by (site, scope) (patroni_primary) > 1
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than one Patroni primary in {{ $labels.scope }} ({{ $labels.site }})"
+          description: "{{ $value }} nodes report themselves as primary. This is a split brain — stop writes and reconcile before any further failover."
+
+      # patroni_replication_lag_bytes does not exist. Patroni exposes raw LSNs
+      # instead, so the lag is derived: highest LSN known in the cluster minus
+      # the LSN this node has replayed. The leader publishes xlog_location; a
+      # standby_leader (DR) publishes only xlog_received_location, so both are
+      # considered when picking the cluster reference LSN.
       - alert: PatroniReplicationLagHigh
-        expr: patroni_xlog_paused == 0 and patroni_replication_lag_bytes > 50000000
+        expr: >
+          (
+            max by (site, scope) ({__name__=~"patroni_xlog_location|patroni_xlog_received_location", job=~"patroni_hq|patroni_dr"})
+            - on (site, scope) group_right ()
+            (patroni_xlog_replayed_location{job=~"patroni_hq|patroni_dr"} != 0)
+          ) > 50000000
+          and on (site, scope, name) patroni_xlog_paused == 0
         for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "Replication lag high on {{ $labels.instance }}"
-          description: "Replica {{ $labels.instance }} is more than 50MB behind the primary for over 2 minutes."
+          summary: "Replication lag high on {{ $labels.name }} ({{ $labels.site }})"
+          description: "Replica {{ $labels.name }} is more than 50MB behind the cluster leader for over 2 minutes."
 
       - alert: PatroniNodeDown
         expr: up{job=~"patroni_hq|patroni_dr"} == 0
@@ -31,7 +56,25 @@ groups:
           severity: critical
         annotations:
           summary: "Patroni REST API unreachable on {{ $labels.instance }}"
-          description: "Prometheus cannot reach the Patroni REST API on {{ $labels.instance }} for over 1 minute."
+          description: "Prometheus cannot reach the Patroni REST API on {{ $labels.instance }} for over 1 minute. HAProxy uses this same endpoint for its health checks."
+
+      - alert: PatroniPostgresNotRunning
+        expr: patroni_postgres_running == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL not running on {{ $labels.name }} ({{ $labels.site }})"
+          description: "Patroni reports PostgreSQL as stopped on {{ $labels.name }} for over 2 minutes."
+
+      - alert: PatroniDcsUnreachable
+        expr: (time() - patroni_dcs_last_seen) > 60
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Patroni on {{ $labels.name }} cannot reach etcd"
+          description: "{{ $labels.name }} has not contacted the DCS successfully for over 60s. Without etcd, Patroni will demote the primary unless failsafe mode is active."
 
   # =================================================================
   # etcd cluster health
@@ -57,6 +100,85 @@ groups:
           summary: "etcd quorum at risk in {{ $labels.site }}"
           description: "Fewer than 2 etcd members are reachable in {{ $labels.site }}. One more failure will lose quorum."
 
+      - alert: EtcdLeaderFlapping
+        expr: increase(etcd_server_leader_changes_seen_total[15m]) > 2
+        labels:
+          severity: warning
+        annotations:
+          summary: "etcd leader elections repeating in {{ $labels.site }}"
+          description: "{{ $value }} leader changes in 15 minutes on {{ $labels.instance }}. Each election can trigger a Patroni failover — check disk fsync latency and network RTT between members."
+
+      # The single most important etcd metric: Raft cannot commit faster than
+      # the WAL can be fsynced. Above ~25ms p99 the cluster starts electing.
+      - alert: EtcdHighFsyncLatency
+        expr: >
+          histogram_quantile(0.99,
+            sum by (site, instance, le) (rate(etcd_disk_wal_fsync_duration_seconds_bucket[5m]))
+          ) > 0.025
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "etcd WAL fsync p99 above 25ms on {{ $labels.instance }}"
+          description: "p99 fsync is {{ $value }}s. Sustained values at this level cause leader elections and unnecessary PostgreSQL failovers."
+
+      - alert: EtcdHighCommitLatency
+        expr: >
+          histogram_quantile(0.99,
+            sum by (site, instance, le) (rate(etcd_disk_backend_commit_duration_seconds_bucket[5m]))
+          ) > 0.25
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "etcd backend commit p99 above 250ms on {{ $labels.instance }}"
+          description: "The etcd backend is committing slowly — the data disk on this node is the likely bottleneck."
+
+      - alert: EtcdDatabaseQuotaHigh
+        expr: >
+          etcd_mvcc_db_total_size_in_bytes
+          / on (site, instance) etcd_server_quota_backend_bytes
+          * 100 > 80
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "etcd database at {{ $value }}% of its backend quota on {{ $labels.instance }}"
+          description: "Reaching the quota puts etcd into a read-only NOSPACE alarm. Patroni can then no longer update the cluster key and failover stops working. Compact and defragment."
+
+      - alert: EtcdProposalsFailing
+        expr: rate(etcd_server_proposals_failed_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "etcd Raft proposals failing on {{ $labels.instance }}"
+          description: "Failed proposals usually accompany a leader change or a loss of quorum."
+
+  # =================================================================
+  # PostgreSQL (postgres_exporter)
+  # =================================================================
+  - name: postgresql_alerts
+    rules:
+
+      - alert: PostgresExporterCannotConnect
+        expr: pg_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "postgres_exporter cannot connect to PostgreSQL on {{ $labels.instance }}"
+          description: "The exporter target is up but the database connection fails, so every pg_* metric for this node is missing. Check the exporter DSN and that PostgreSQL is accepting connections."
+
+      - alert: PostgresExporterScrapeError
+        expr: pg_exporter_last_scrape_error == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "postgres_exporter scrape failing on {{ $labels.instance }}"
+          description: "The last scrape returned an error — metrics for this node may be stale."
+
   # =================================================================
   # pgBackRest / backup health
   # =================================================================
@@ -81,6 +203,17 @@ groups:
           summary: "pgBackRest stanza {{ $labels.stanza }} unhealthy"
           description: "pgBackRest reports the stanza status as not OK for over 10 minutes."
 
+      # pgbackrest_backup_age_seconds stays 0 when no backup exists at all,
+      # so the "too old" rule below cannot catch that case — this one does.
+      - alert: PgBackRestNoValidBackup
+        expr: pgbackrest_backup_success == 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No valid pgBackRest backup for {{ $labels.stanza }}"
+          description: "pgBackRest reports no usable backup for this stanza. There is currently nothing to restore from."
+
       - alert: PgBackRestBackupTooOld
         expr: pgbackrest_backup_age_seconds > 8 * 24 * 3600
         labels:
@@ -90,13 +223,25 @@ groups:
           description: "Expected a full backup weekly (every Sunday). No successful backup in over 8 days."
 
       - alert: PgBackRestWalArchivingStalled
-        expr: (time() - pgbackrest_last_wal_archived_timestamp_seconds) > 3600
+        expr: (time() - pgbackrest_last_wal_archive_timestamp_seconds) > 3600
         for: 5m
         labels:
           severity: critical
         annotations:
           summary: "WAL archiving stalled for {{ $labels.stanza }}"
           description: "No new WAL segment archived in over 1 hour. PITR coverage is at risk and the primary's WAL directory could fill up."
+
+      # pgbackrest.prom is published through the node_exporter textfile
+      # collector. A parse error there silently freezes every metric above at
+      # its last scraped value, so the backup alerts stop being trustworthy.
+      - alert: PgBackRestMetricsStale
+        expr: node_textfile_scrape_error{job=~"node_exporter_hq|node_exporter_dr"} == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Textfile collector error on {{ $labels.instance }}"
+          description: "node_exporter cannot parse a .prom file on {{ $labels.instance }}. On the Backup Servers this makes every pgBackRest metric stale."
 
   # =================================================================
   # Disk space (all VMs, both sites)
@@ -128,14 +273,33 @@ groups:
   - name: haproxy_alerts
     rules:
 
+      # The label emitted by haproxy_exporter is `backend`, not `proxy`.
       - alert: HAProxyAllBackendsDown
-        expr: sum by (site) (haproxy_server_up{proxy="postgres_primary"}) == 0
+        expr: sum by (site, backend) (haproxy_server_up{backend="postgres_primary"}) == 0
         for: 30s
         labels:
           severity: critical
         annotations:
           summary: "All PostgreSQL backends down behind HAProxy in {{ $labels.site }}"
-          description: "HAProxy has no healthy backend to route to — applications cannot reach the database."
+          description: "HAProxy has no healthy server in the {{ $labels.backend }} backend — applications cannot reach the database."
+
+      - alert: HAProxyBackendDown
+        expr: haproxy_backend_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "HAProxy backend {{ $labels.backend }} is DOWN in {{ $labels.site }}"
+          description: "The backend has no usable server and is refusing traffic."
+
+      - alert: HAProxyDown
+        expr: haproxy_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "HAProxy not responding on {{ $labels.instance }}"
+          description: "The exporter reached the target but HAProxy itself did not answer on its stats socket."
 
       - alert: HAProxyExporterDown
         expr: up{job=~"haproxy_exporter_hq|haproxy_exporter_dr"} == 0
