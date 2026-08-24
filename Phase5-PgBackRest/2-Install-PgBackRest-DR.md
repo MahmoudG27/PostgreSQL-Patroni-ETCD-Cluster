@@ -437,6 +437,8 @@ repo1-retention-full=4
 repo1-retention-full-type=count
 repo1-retention-archive-type=full
 repo1-retention-archive=1
+repo1-cipher-type=aes-256-cbc
+repo1-cipher-pass=REPLACE_WITH_A_LONG_RANDOM_PASSPHRASE
 
 [pg_cluster_dr]
 pg1-host=10.1.0.4
@@ -542,6 +544,62 @@ With a weekly full backup, keeping 4 full backups gives roughly one month of bac
 Without retention settings, pgBackRest never expires anything and the repository grows until the Backup Server runs out of disk.
 
 Expiration runs automatically at the end of each `backup` command.
+
+---
+
+## Encryption
+
+The backup repository holds a complete copy of the database. Unencrypted, it is
+the easiest way to steal the entire dataset without ever touching PostgreSQL.
+
+pgBackRest encrypts the repository with AES-256 when these two settings are
+present in the `[global]` section on the **Backup Server**:
+
+```ini
+repo1-cipher-type=aes-256-cbc
+repo1-cipher-pass=REPLACE_WITH_A_LONG_RANDOM_PASSPHRASE
+```
+
+Generate the passphrase with:
+
+```bash
+openssl rand -base64 48
+```
+
+Encryption is performed by the repository host, so the PostgreSQL nodes do not
+need the passphrase in their own `/etc/pgbackrest.conf`. They push WAL and backup
+data over SSH and the Backup Server encrypts it on arrival.
+
+> **This must be set BEFORE `stanza-create`.**
+>
+> The cipher settings are recorded in the stanza when it is created. pgBackRest
+> will refuse to run against an existing stanza whose cipher settings changed.
+> Adding encryption to a stanza that already exists means `stanza-delete` and
+> starting over — **every existing backup is lost**.
+>
+> Configure it now, while the repository is still empty.
+
+> **If you lose the passphrase, the backups are unrecoverable.**
+>
+> There is no recovery mechanism. Store it in the client's password manager or
+> secrets vault, and **never** inside the backup repository itself. Confirm the
+> storage location with the client before go-live — this is exactly the kind of
+> single point of failure that only shows up during a real disaster.
+
+Protect the file that holds it:
+
+```bash
+sudo chown postgres:postgres /etc/pgbackrest.conf
+sudo chmod 640 /etc/pgbackrest.conf
+```
+
+Verify the stanza reports encryption after creation:
+
+```bash
+sudo -u postgres pgbackrest --stanza=pg_cluster_dr info
+```
+
+The output includes `cipher: aes-256-cbc` when encryption is active.
 
 ---
 
@@ -943,6 +1001,8 @@ After configuring pgBackRest:
 * [ ] PostgreSQL nodes can SSH to Backup Server if reverse access is required.
 * [ ] `/etc/pgbackrest.conf` exists on Backup Server.
 * [ ] Retention settings are configured in the `[global]` section.
+* [ ] `repo1-cipher-type=aes-256-cbc` was set BEFORE `stanza-create`.
+* [ ] The cipher passphrase is stored outside the backup repository.
 * [ ] PostgreSQL node pgBackRest configuration points to `10.1.0.30`.
 * [ ] `archive_mode` is enabled.
 * [ ] `archive_command` uses `pgbackrest archive-push`.

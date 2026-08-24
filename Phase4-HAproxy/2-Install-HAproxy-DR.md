@@ -172,6 +172,22 @@ backend postgres_primary
     server dr-node-02 10.1.0.5:5432 check port 8008
     server dr-node-03 10.1.0.6:5432 check port 8008
 
+frontend postgres_read
+    bind *:5433
+    default_backend postgres_replicas
+
+backend postgres_replicas
+    mode tcp
+
+    balance roundrobin
+
+    option httpchk GET /replica
+    http-check expect status 200
+
+    server dr-node-01 10.1.0.4:5432 check port 8008
+    server dr-node-02 10.1.0.5:5432 check port 8008
+    server dr-node-03 10.1.0.6:5432 check port 8008
+
 frontend stats
     bind *:8404
     mode http
@@ -323,6 +339,101 @@ dr-node-01 → 10.1.0.4
 dr-node-02 → 10.1.0.5
 dr-node-03 → 10.1.0.6
 ```
+
+---
+
+
+# 9b. PostgreSQL Read Backend
+
+The write path above sends every connection to the single primary, which leaves
+the replicas serving no traffic at all.
+
+A second frontend on port **5433** spreads read-only work across the replicas:
+
+```haproxy
+frontend postgres_read
+    bind *:5433
+    default_backend postgres_replicas
+
+backend postgres_replicas
+    mode tcp
+    balance roundrobin
+    option httpchk GET /replica
+    http-check expect status 200
+    server dr-node-01 10.1.0.4:5432 check port 8008
+    server dr-node-02 10.1.0.5:5432 check port 8008
+    server dr-node-03 10.1.0.6:5432 check port 8008
+```
+
+The only differences from the write backend are:
+
+```text
+GET /replica       instead of GET /primary
+balance roundrobin instead of the default
+port 5433          instead of 5432
+```
+
+## How the two backends stay mutually exclusive
+
+Patroni serves both endpoints on the same REST API port, and they never both
+return 200 on the same node:
+
+```text
+GET /primary   200 only on the leader          → 1 server UP in postgres_primary
+GET /replica   200 only on a running replica   → N servers UP in postgres_replicas
+```
+
+When a failover happens, the promoted node stops answering `/replica` and starts
+answering `/primary`. HAProxy moves it between the two backends automatically —
+no configuration change and no restart.
+
+## Client usage
+
+```text
+Port 5432   writes and read-after-write consistency
+Port 5433   reporting, analytics, dashboards, anything read-only
+```
+
+Applications must open **two connection pools**. This is a decision the client's
+application team has to make — a read-only pool that is accidentally used for
+writes will fail with:
+
+```text
+ERROR: cannot execute INSERT in a read-only transaction
+```
+
+## Replica lag caveat
+
+Cross-site replication is asynchronous, and local replicas can also fall behind
+under load. A read on port 5433 may return slightly stale data.
+
+If a query must see data that was just written, it must use port 5432. Make this
+explicit to the application team — it is the single most common source of bugs
+when a read/write split is introduced.
+
+Optionally, keep a badly lagging replica out of rotation by setting a tag in
+`patroni.yml` on that node:
+
+```yaml
+tags:
+  noloadbalance: true
+```
+
+Patroni then returns a non-200 from `/replica` on that node and HAProxy drops it
+from the read pool.
+
+## Verify
+
+```bash
+# Should report f — this is the primary
+psql -h 10.1.0.100 -p 5432 -U postgres -c "SELECT pg_is_in_recovery();"
+
+# Should report t — this is a replica
+psql -h 10.1.0.100 -p 5433 -U postgres -c "SELECT pg_is_in_recovery();"
+```
+
+Both backends should now appear on the stats page at `:8404/stats`, with exactly
+one server UP in `postgres_primary` and the rest UP in `postgres_replicas`.
 
 ---
 
