@@ -1,7 +1,7 @@
-# Grafana Loki & Promtail — Centralized Log Aggregation
+# Grafana Loki & Alloy — Centralized Log Aggregation
 
 This document describes how to install and configure **Loki** as the central log
-store, and **Promtail** as the log shipper running on every node.
+store, and **Grafana Alloy** as the log collector running on every node.
 
 Loki runs on the same Monitoring Server as Prometheus and Grafana:
 
@@ -17,6 +17,14 @@ It closes the Scope of Work requirement that metrics alone do not satisfy:
 
 and it is the destination for the pgAudit trail produced in
 `Phase7-Security/3-Audit-Logging-pgAudit.md`.
+
+> **Promtail is not used in this platform.**
+>
+> Grafana declared Promtail end of life on **2 March 2026**. Commercial support
+> has ended and no further updates will be released. All collector development
+> now happens in **Grafana Alloy**, which is what this document deploys.
+>
+> Section 25 covers converting an existing Promtail configuration if you have one.
 
 ---
 
@@ -59,7 +67,7 @@ database and a time window.
                                      │  HTTP push (:3100/loki/api/v1/push)
              ┌───────────────┬───────┴───────┬───────────────┐
              │               │               │               │
-        Promtail        Promtail        Promtail        Promtail
+          Alloy           Alloy           Alloy           Alloy
         PG nodes        HAProxy         Backup Srv      DR nodes
         10.0.0.4-6      10.0.0.100      10.0.0.30       10.1.0.4-6
 
@@ -69,7 +77,7 @@ database and a time window.
      etcd     (journald)
 ```
 
-Promtail **pushes** to Loki. This is the opposite of Prometheus, which pulls.
+Alloy **pushes** to Loki. This is the opposite of Prometheus, which pulls.
 The practical consequence: Loki must be reachable *from* every node, and a node
 that cannot reach Loki buffers locally and retries rather than losing lines.
 
@@ -208,6 +216,9 @@ limits_config:
   ingestion_burst_size_mb: 32
   max_query_series: 5000
   max_query_parallelism: 16
+
+  # Required for structured metadata, which section 17 relies on
+  allow_structured_metadata: true
 
   # Enables the log-volume panel in Grafana Explore
   volume_enabled: true
@@ -348,19 +359,48 @@ Add to `Phase6-Monitoring/prometheus/prometheus.yml`:
           site: "hq"
 ```
 
+Alloy also exposes its own metrics on every node. Add those too:
+
+```yaml
+  - job_name: "alloy_hq"
+    static_configs:
+      - targets:
+          - "10.0.0.4:12345"
+          - "10.0.0.5:12345"
+          - "10.0.0.6:12345"
+          - "10.0.0.20:12345"
+          - "10.0.0.30:12345"
+          - "10.0.0.100:12345"
+        labels:
+          site: "hq"
+
+  - job_name: "alloy_dr"
+    static_configs:
+      - targets:
+          - "10.1.0.4:12345"
+          - "10.1.0.5:12345"
+          - "10.1.0.6:12345"
+          - "10.1.0.20:12345"
+          - "10.1.0.30:12345"
+          - "10.1.0.100:12345"
+        labels:
+          site: "dr"
+```
+
 Reload Prometheus:
 
 ```bash
 sudo systemctl reload prometheus
 ```
 
-Useful metrics once it is scraped:
+Useful metrics once scraped:
 
 ```text
 loki_ingester_streams_created_total       stream count — watch for cardinality blowups
 loki_distributor_bytes_received_total     ingest volume, for sizing
 loki_request_duration_seconds             query and push latency
-loki_ingester_chunks_flushed_total        flush activity
+loki_write_sent_entries_total             lines Alloy successfully pushed
+loki_write_dropped_entries_total          lines Alloy gave up on — should be zero
 ```
 
 ---
@@ -392,12 +432,6 @@ datasources:
     isDefault: false
     jsonData:
       maxLines: 1000
-      # Jump straight from a log line to the metrics for the same node
-      derivedFields:
-        - name: instance
-          matcherRegex: 'instance="([^"]+)"'
-          datasourceUid: prometheus
-          url: '$${__value.raw}'
 EOF
 
 sudo systemctl restart grafana-server
@@ -407,15 +441,15 @@ sudo systemctl restart grafana-server
 
 # 12. Prepare PostgreSQL Logs for Loki
 
-**Do this before installing Promtail.** It decides how hard the parsing will be.
+**Do this before installing Alloy.** It decides how hard the parsing will be.
 
 `Phase7-Security/3-Audit-Logging-pgAudit.md` configures `log_destination = 'csvlog'`.
-CSV is fine for humans and for loading into a table, but it is awkward for
-Promtail — Promtail has no CSV parser, and CSV entries can span multiple lines
-when a statement contains a newline.
+CSV is fine for humans and for loading into a table, but it is awkward for a log
+collector — there is no CSV parsing stage, and CSV entries can span multiple
+lines when a statement contains a newline.
 
-PostgreSQL 15 and later can emit **JSON logs**, which Promtail parses natively
-with a single stage, and which never span lines. PostgreSQL 18 supports it.
+PostgreSQL 15 and later can emit **JSON logs**, which parse with a single stage
+and never span lines. PostgreSQL 18 supports it.
 
 Via `patronictl edit-config`:
 
@@ -440,8 +474,8 @@ log_destination  csvlog  →  csvlog,jsonlog
                  to Loki.
 
 log_file_mode    0600    →  0640
-                 So the promtail user can read the file through the postgres
-                 group. See section 15 — without this, Promtail silently
+                 So the alloy user can read the file through the postgres
+                 group. See section 16 — without this, Alloy silently
                  collects nothing.
 ```
 
@@ -462,76 +496,127 @@ postgresql-2026-08-24_000000.log
 
 ---
 
-# 13. Create the Promtail User
+# 13. Why Alloy and Not Promtail
 
-On **every** node — PostgreSQL nodes, HAProxy, Backup Servers, both sites:
+Promtail reached **end of life on 2 March 2026**. Grafana's notice is explicit:
 
-```bash
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin promtail
-
-sudo mkdir -p /etc/promtail /var/lib/promtail
-sudo chown -R promtail:promtail /var/lib/promtail
+```text
+"Promtail is end of life (EOL) as of March 2, 2026. Commercial support has
+ ended. No future support or updates will be provided. All future feature
+ development will occur in Grafana Alloy. If you are currently using Promtail,
+ you must migrate to Alloy or another supported client."
 ```
 
-Promtail must be able to read logs it does not own. Add it to the right groups
-rather than running it as root:
+For a platform being handed to a client under a support agreement, deploying an
+EOL component is not defensible. Alloy is the supported successor and is a
+straight replacement here.
+
+Practical differences you will notice:
+
+```text
+* Configuration language changes from YAML to Alloy's component syntax.
+  The pipeline stages themselves keep the same names and behaviour.
+
+* Journal support is built into the official package. Promtail's released
+  binary often lacked it, which was a recurring source of confusion.
+
+* A built-in web UI on :12345 shows every component, its health, and the
+  data flowing between them. Debugging a broken pipeline stops being guesswork.
+
+* Alloy also collects metrics and traces. If the client later wants
+  application tracing, the agent is already on every node.
+
+* It is installed from Grafana's APT repository, so it updates through the
+  normal package manager instead of a manual binary download.
+```
+
+---
+
+# 14. Install Alloy
+
+On **every** node — PostgreSQL nodes, HAProxy, Backup Servers, Monitoring
+Servers, both sites.
+
+Add Grafana's APT repository:
+
+```bash
+sudo apt install -y gpg curl
+
+sudo mkdir -p /etc/apt/keyrings
+
+curl -fsSL https://apt.grafana.com/gpg.key \
+  | gpg --dearmor \
+  | sudo tee /etc/apt/keyrings/grafana.gpg > /dev/null
+
+echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" \
+  | sudo tee /etc/apt/sources.list.d/grafana.list
+```
+
+Install:
+
+```bash
+sudo apt update
+sudo apt install -y alloy
+```
+
+Verify:
+
+```bash
+alloy --version
+```
+
+The package creates:
+
+```text
+/usr/bin/alloy                  the binary
+/etc/alloy/config.alloy         the configuration
+/etc/default/alloy              service environment
+/var/lib/alloy/data             component state and file read positions
+alloy                           a system user and group
+alloy.service                   the systemd unit
+```
+
+> Do not start it yet — the shipped `config.alloy` is a placeholder.
+
+---
+
+# 15. Alloy User and Group Membership
+
+Alloy must read logs it does not own. Add it to the right groups rather than
+running it as root:
 
 ```bash
 # systemd journal — for Patroni, etcd and system units
-sudo usermod -aG systemd-journal promtail
+sudo usermod -aG systemd-journal alloy
 
 # /var/log files owned by root:adm — syslog, HAProxy
-sudo usermod -aG adm promtail
+sudo usermod -aG adm alloy
 
-# PostgreSQL logs (database nodes only)
-sudo usermod -aG postgres promtail
+# PostgreSQL logs — database nodes ONLY
+sudo usermod -aG postgres alloy
 ```
 
-> **Never run Promtail as root.** It reads files an attacker may partly control.
+Confirm:
+
+```bash
+id alloy
+```
+
+> **Never run Alloy as root.** It reads files an attacker may partly control.
 > Group membership plus `0640` log files is enough.
 
----
-
-# 14. Install the Promtail Binary
-
-Use the **same version as Loki**:
-
-```bash
-LOKI_VERSION=$(curl -s https://api.github.com/repos/grafana/loki/releases/latest \
-  | jq -r .tag_name | sed 's/^v//')
-
-cd /tmp
-
-curl -fLO "https://github.com/grafana/loki/releases/download/v${LOKI_VERSION}/promtail-linux-amd64.zip"
-
-unzip -o promtail-linux-amd64.zip
-sudo mv promtail-linux-amd64 /usr/local/bin/promtail
-sudo chown root:root /usr/local/bin/promtail
-sudo chmod 755 /usr/local/bin/promtail
-
-promtail --version
-```
-
-Check whether this build can read the systemd journal:
-
-```bash
-promtail --help 2>&1 | grep -i journal
-```
-
-> **If journal support is missing**, the released binary was built without it.
-> Two options: install Promtail from Grafana's APT repository (that package is
-> built with journal support), or drop the `journal` scrape blocks in section 17
-> and read `/var/log/syslog` instead. Section 21 covers the symptom.
+> On the HAProxy, Backup and Monitoring servers there is no `postgres` group —
+> skip that line there.
 
 ---
 
-# 15. Fix the Log File Permissions
+# 16. Fix the Log File Permissions
 
 This is the step that silently breaks everything if skipped.
 
 `Phase7-Security/3-Audit-Logging-pgAudit.md` sets the log directory to `700` so
-that only `postgres` can read it. Promtail then cannot read a single line, and
-it fails **quietly** — the service runs, reports healthy, and ships nothing.
+that only `postgres` can read it. Alloy then cannot read a single line, and it
+fails **quietly** — the service runs, reports healthy, and ships nothing.
 
 On the database nodes:
 
@@ -552,10 +637,10 @@ sudo sed -i 's/create 0600 postgres postgres/create 0640 postgres postgres/' \
   /etc/logrotate.d/postgresql-audit
 ```
 
-Verify Promtail can actually read as its own user:
+Verify Alloy can actually read as its own user:
 
 ```bash
-sudo -u promtail head -c 200 /var/log/postgresql/postgresql-*.json
+sudo -u alloy head -c 200 /var/log/postgresql/postgresql-*.json
 ```
 
 > **This weakens nothing that matters.** The audit-trail requirement is that a
@@ -565,275 +650,354 @@ sudo -u promtail head -c 200 /var/log/postgresql/postgresql-*.json
 
 ---
 
-# 16. Promtail Configuration — PostgreSQL Nodes
+# 17. Alloy Configuration — PostgreSQL Nodes
 
 This is the important one: it carries the pgAudit trail.
 
-Create `/etc/promtail/promtail-config.yml`. Change `site`, `node` and the Loki
-address per node.
+Replace `/etc/alloy/config.alloy`. Change `site`, `node` and `instance` per node.
 
 ```bash
-sudo tee /etc/promtail/promtail-config.yml > /dev/null <<'EOF'
-server:
-  http_listen_port: 9080
-  grpc_listen_port: 0
-  log_level: info
+sudo tee /etc/alloy/config.alloy > /dev/null <<'EOF'
+// ===============================================================
+// Destination — every pipeline forwards here
+// ===============================================================
+loki.write "default" {
+  endpoint {
+    url = "http://10.0.0.20:3100/loki/api/v1/push"
 
-positions:
-  # Remembers how far into each file Promtail has read, so a restart
-  # does not re-ship everything.
-  filename: /var/lib/promtail/positions.yaml
+    // Buffer and retry rather than dropping lines when Loki is unreachable
+    retry_on_http_429 = true
 
-clients:
-  - url: http://10.0.0.20:3100/loki/api/v1/push
-    # Buffer and retry rather than dropping lines when Loki is unreachable
-    backoff_config:
-      min_period: 500ms
-      max_period: 5m
-      max_retries: 20
-    batchwait: 1s
-    batchsize: 1048576
+    backoff_config {
+      min_period  = "500ms"
+      max_period  = "5m"
+      max_retries = 20
+    }
+  }
+}
 
-scrape_configs:
+// ===============================================================
+// PostgreSQL — JSON log, which carries the pgAudit entries
+// ===============================================================
+local.file_match "postgresql" {
+  path_targets = [{
+    __path__ = "/var/log/postgresql/*.json",
+    job      = "postgresql",
+    site     = "hq",                 // ← dr on the DR nodes
+    node     = "hq-node-01",         // ← per node
+    instance = "10.0.0.4:5432",      // ← matches the Prometheus instance label
+  }]
+}
 
-  # ===============================================================
-  # PostgreSQL — JSON log, which carries the pgAudit entries
-  # ===============================================================
-  - job_name: postgresql
-    static_configs:
-      - targets: [localhost]
-        labels:
-          job: postgresql
-          site: hq                      # ← dr on the DR nodes
-          node: hq-node-01              # ← per node
-          instance: 10.0.0.4:5432       # ← matches the Prometheus instance label
-          __path__: /var/log/postgresql/*.json
+loki.source.file "postgresql" {
+  targets    = local.file_match.postgresql.targets
+  forward_to = [loki.process.postgresql.receiver]
+}
 
-    pipeline_stages:
+loki.process "postgresql" {
+  forward_to = [loki.write.default.receiver]
 
-      # ---- 1. Parse the PostgreSQL JSON log entry ----
-      - json:
-          expressions:
-            timestamp:        timestamp
-            db_user:          user
-            dbname:           dbname
-            pid:              pid
-            remote_host:      remote_host
-            error_severity:   error_severity
-            state_code:       state_code
-            message:          message
-            application_name: application_name
-            backend_type:     backend_type
-            session_id:       session_id
+  // ---- 1. Parse the PostgreSQL JSON log entry ----
+  stage.json {
+    expressions = {
+      timestamp        = "timestamp",
+      db_user          = "user",
+      dbname           = "dbname",
+      pid              = "pid",
+      remote_host      = "remote_host",
+      error_severity   = "error_severity",
+      state_code       = "state_code",
+      message          = "message",
+      application_name = "application_name",
+      backend_type     = "backend_type",
+      session_id       = "session_id",
+    }
+  }
 
-      # ---- 2. Use PostgreSQL's own timestamp, not the read time ----
-      - timestamp:
-          source: timestamp
-          format: "2006-01-02 15:04:05.000 MST"
+  // ---- 2. Use PostgreSQL's own timestamp, not the read time ----
+  stage.timestamp {
+    source = "timestamp"
+    format = "2006-01-02 15:04:05.000 MST"
+  }
 
-      # ---- 3. Low-cardinality labels only. See section 20. ----
-      - labels:
-          error_severity:
-          dbname:
+  // ---- 3. Low-cardinality labels only. See section 21. ----
+  stage.labels {
+    values = {
+      error_severity = "",
+      dbname         = "",
+    }
+  }
 
-      # ---- 4. High-cardinality fields as structured metadata ----
-      # Queryable and displayed, but NOT part of the stream index.
-      - structured_metadata:
-          db_user:
-          remote_host:
-          application_name:
-          session_id:
-          pid:
+  // ---- 4. High-cardinality fields as structured metadata ----
+  // Queryable and displayed, but NOT part of the stream index.
+  stage.structured_metadata {
+    values = {
+      db_user          = "",
+      remote_host      = "",
+      application_name = "",
+      session_id       = "",
+      pid              = "",
+    }
+  }
 
-      # ---- 5. Extract the pgAudit fields out of the message ----
-      # pgAudit writes:
-      #   AUDIT: <type>,<stmt_id>,<sub_id>,<class>,<command>,<obj_type>,<obj_name>,<statement>,<params>
-      # Lines that are not audit entries simply do not match and pass through.
-      - regex:
-          source: message
-          expression: '^AUDIT: (?P<audit_type>[A-Z]+),(?P<audit_stmt_id>\d+),(?P<audit_sub_id>\d+),(?P<audit_class>[A-Z]+),(?P<audit_command>[^,]*),(?P<audit_object_type>[^,]*),(?P<audit_object_name>[^,]*),'
+  // ---- 5. Extract the pgAudit fields out of the message ----
+  // pgAudit writes:
+  //   AUDIT: <type>,<stmt_id>,<sub_id>,<class>,<command>,<obj_type>,<obj_name>,<statement>,<params>
+  // Lines that are not audit entries simply do not match and pass through.
+  //
+  // NOTE: backslashes are DOUBLED. Alloy strings use Go escape rules, so a
+  // regex \d must be written \\d. This is the most common conversion mistake.
+  stage.regex {
+    source     = "message"
+    expression = "^AUDIT: (?P<audit_type>[A-Z]+),(?P<audit_stmt_id>\\d+),(?P<audit_sub_id>\\d+),(?P<audit_class>[A-Z]+),(?P<audit_command>[^,]*),(?P<audit_object_type>[^,]*),(?P<audit_object_name>[^,]*),"
+  }
 
-      # audit_class is a closed set: READ / WRITE / FUNCTION / ROLE / DDL / MISC
-      # audit_type is SESSION or OBJECT. Both are safe as labels.
-      - labels:
-          audit_type:
-          audit_class:
+  // audit_class is a closed set: READ / WRITE / FUNCTION / ROLE / DDL / MISC
+  // audit_type is SESSION or OBJECT. Both are safe as labels.
+  stage.labels {
+    values = {
+      audit_type  = "",
+      audit_class = "",
+    }
+  }
 
-      # The command and object name are far too varied to index
-      - structured_metadata:
-          audit_command:
-          audit_object_type:
-          audit_object_name:
+  // The command and object name are far too varied to index
+  stage.structured_metadata {
+    values = {
+      audit_command     = "",
+      audit_object_type = "",
+      audit_object_name = "",
+    }
+  }
 
-      # ---- 6. Ship the human-readable message as the log line ----
-      - output:
-          source: message
+  // ---- 6. Ship the human-readable message as the log line ----
+  stage.output {
+    source = "message"
+  }
+}
 
-  # ===============================================================
-  # Patroni and etcd — systemd journal
-  # ===============================================================
-  - job_name: journal
-    journal:
-      path: /var/log/journal
-      max_age: 12h
-      json: false
-      labels:
-        job: systemd-journal
-        site: hq
-        node: hq-node-01
-    relabel_configs:
-      - source_labels: ['__journal__systemd_unit']
-        target_label: unit
-      - source_labels: ['__journal_priority_keyword']
-        target_label: priority
-    pipeline_stages:
-      # Keep only the units that matter — journald carries a lot of noise
-      - match:
-          selector: '{unit!~"patroni.service|etcd.service|postgresql.*|pgbackrest.*|sshd.service|haproxy.service"}'
-          action: drop
+// ===============================================================
+// Patroni and etcd — systemd journal
+// ===============================================================
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "priority"
+  }
+}
+
+loki.source.journal "system" {
+  path          = "/var/log/journal"
+  max_age       = "12h"
+  relabel_rules = loki.relabel.journal.rules
+  forward_to    = [loki.process.journal.receiver]
+
+  labels = {
+    job  = "systemd-journal",
+    site = "hq",
+    node = "hq-node-01",
+  }
+}
+
+loki.process "journal" {
+  forward_to = [loki.write.default.receiver]
+
+  // Keep only the units that matter — journald carries a lot of noise
+  stage.match {
+    selector = "{unit!~\"patroni.service|etcd.service|postgresql.*|pgbackrest.*|sshd.service\"}"
+    action   = "drop"
+  }
+}
 EOF
 ```
 
 Set ownership:
 
 ```bash
-sudo chown -R promtail:promtail /etc/promtail
-sudo chmod 640 /etc/promtail/promtail-config.yml
+sudo chown root:alloy /etc/alloy/config.alloy
+sudo chmod 640 /etc/alloy/config.alloy
+```
+
+Check the syntax before starting — this parses the file and reports the exact
+line on failure:
+
+```bash
+sudo alloy fmt /etc/alloy/config.alloy
 ```
 
 ---
 
-# 17. Promtail Configuration — Other Node Types
+# 18. Alloy Configuration — Other Node Types
 
-Same file, different `scrape_configs`. Keep `site`, `node` and `instance`
-consistent with the Prometheus labels so dashboards can pivot between the two.
+Same file, different components. Keep `site`, `node` and `instance` consistent
+with the Prometheus labels so dashboards can pivot between logs and metrics.
+
+Every node also needs the `loki.write "default"` block from section 17.
 
 ## HAProxy nodes (10.0.0.100 / 10.1.0.100)
 
-```yaml
-  - job_name: haproxy
-    static_configs:
-      - targets: [localhost]
-        labels:
-          job: haproxy
-          site: hq
-          node: hq-haproxy
-          instance: 10.0.0.100:9101
-          __path__: /var/log/haproxy.log
+```alloy
+local.file_match "haproxy" {
+  path_targets = [{
+    __path__ = "/var/log/haproxy.log",
+    job      = "haproxy",
+    site     = "hq",
+    node     = "hq-haproxy",
+    instance = "10.0.0.100:9101",
+  }]
+}
 
-    pipeline_stages:
-      # HAProxy TCP log line:
-      # client_ip:port [date] frontend backend/server times bytes flags conns
-      - regex:
-          expression: '^(?P<syslog_ts>\w+\s+\d+\s+[\d:]+) (?P<host>\S+) haproxy\[(?P<pid>\d+)\]: (?P<client>\S+) \[(?P<accept_date>[^\]]+)\] (?P<frontend>\S+) (?P<backend>[^/]+)/(?P<server>\S+)'
-      - labels:
-          frontend:
-          backend:
-      - structured_metadata:
-          server:
-          client:
+loki.source.file "haproxy" {
+  targets    = local.file_match.haproxy.targets
+  forward_to = [loki.process.haproxy.receiver]
+}
+
+loki.process "haproxy" {
+  forward_to = [loki.write.default.receiver]
+
+  // HAProxy TCP log line:
+  //   client_ip:port [date] frontend backend/server times bytes flags conns
+  stage.regex {
+    expression = "^(?P<syslog_ts>\\w+\\s+\\d+\\s+[\\d:]+) (?P<host>\\S+) haproxy\\[(?P<pid>\\d+)\\]: (?P<client>\\S+) \\[(?P<accept_date>[^\\]]+)\\] (?P<frontend>\\S+) (?P<backend>[^/]+)/(?P<server>\\S+)"
+  }
+
+  stage.labels {
+    values = {
+      frontend = "",
+      backend  = "",
+    }
+  }
+
+  stage.structured_metadata {
+    values = {
+      server = "",
+      client = "",
+    }
+  }
+}
 ```
 
 ## Backup Servers (10.0.0.30 / 10.1.0.30)
 
-```yaml
-  - job_name: pgbackrest
-    static_configs:
-      - targets: [localhost]
-        labels:
-          job: pgbackrest
-          site: hq
-          node: hq-backup
-          instance: 10.0.0.30:9100
-          __path__: /var/log/pgbackrest/*.log
+```alloy
+local.file_match "pgbackrest" {
+  path_targets = [{
+    __path__ = "/var/log/pgbackrest/*.log",
+    job      = "pgbackrest",
+    site     = "hq",
+    node     = "hq-backup",
+    instance = "10.0.0.30:9100",
+  }]
+}
 
-    pipeline_stages:
-      # 2026-08-24 02:00:01.123 P00   INFO: backup command begin
-      - regex:
-          expression: '^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) P\d+\s+(?P<level>\w+):'
-      - timestamp:
-          source: ts
-          format: "2006-01-02 15:04:05.000"
-      - labels:
-          level:
+loki.source.file "pgbackrest" {
+  targets    = local.file_match.pgbackrest.targets
+  forward_to = [loki.process.pgbackrest.receiver]
+}
+
+loki.process "pgbackrest" {
+  forward_to = [loki.write.default.receiver]
+
+  // 2026-08-24 02:00:01.123 P00   INFO: backup command begin
+  stage.regex {
+    expression = "^(?P<ts>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3}) P\\d+\\s+(?P<level>\\w+):"
+  }
+
+  stage.timestamp {
+    source = "ts"
+    format = "2006-01-02 15:04:05.000"
+  }
+
+  stage.labels {
+    values = {
+      level = "",
+    }
+  }
+}
 ```
 
-## Monitoring Server itself
+## Monitoring Server
 
-```yaml
-  - job_name: monitoring-stack
-    journal:
-      path: /var/log/journal
-      max_age: 12h
-      labels:
-        job: systemd-journal
-        site: hq
-        node: hq-monitoring
-    relabel_configs:
-      - source_labels: ['__journal__systemd_unit']
-        target_label: unit
-    pipeline_stages:
-      - match:
-          selector: '{unit!~"prometheus.service|grafana-server.service|alertmanager.service|loki.service"}'
-          action: drop
+```alloy
+loki.source.journal "monitoring" {
+  path          = "/var/log/journal"
+  max_age       = "12h"
+  relabel_rules = loki.relabel.journal.rules
+  forward_to    = [loki.process.monitoring.receiver]
+
+  labels = {
+    job  = "systemd-journal",
+    site = "hq",
+    node = "hq-monitoring",
+  }
+}
+
+loki.process "monitoring" {
+  forward_to = [loki.write.default.receiver]
+
+  stage.match {
+    selector = "{unit!~\"prometheus.service|grafana-server.service|alertmanager.service|loki.service|alloy.service\"}"
+    action   = "drop"
+  }
+}
 ```
 
 ---
 
-# 18. Promtail systemd Service
+# 19. Start Alloy and Use the Built-in UI
 
-Identical on every node:
+The package already installed the service. Expose the debugging UI on the node's
+address so Prometheus can scrape it and so you can open it from a browser:
 
 ```bash
-sudo tee /etc/systemd/system/promtail.service > /dev/null <<'EOF'
-[Unit]
-Description=Promtail log shipper for Loki
-Documentation=https://grafana.com/docs/loki/latest/send-data/promtail/
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-User=promtail
-Group=promtail
-# Needed so the systemd-journal and postgres group memberships apply
-SupplementaryGroups=systemd-journal adm postgres
-Type=simple
-ExecStart=/usr/local/bin/promtail -config.file=/etc/promtail/promtail-config.yml
-Restart=on-failure
-RestartSec=5s
-LimitNOFILE=65536
-
-NoNewPrivileges=true
-ProtectSystem=full
-ProtectHome=true
-PrivateTmp=true
-ReadWritePaths=/var/lib/promtail
-
-[Install]
-WantedBy=multi-user.target
+sudo tee /etc/default/alloy > /dev/null <<'EOF'
+CONFIG_FILE="/etc/alloy/config.alloy"
+CUSTOM_ARGS="--server.http.listen-addr=0.0.0.0:12345 --storage.path=/var/lib/alloy/data"
+RESTART_ON_UPGRADE=true
 EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now promtail
-sudo systemctl status promtail
 ```
 
-> On the HAProxy, Backup and Monitoring servers there is no `postgres` group.
-> Remove it from `SupplementaryGroups=` there, or systemd refuses to start the
-> unit.
-
-Verify Promtail's own health endpoint:
+Restrict who can reach it:
 
 ```bash
-curl -s http://localhost:9080/ready
-curl -s http://localhost:9080/metrics | grep promtail_sent_entries_total
+sudo ufw allow from 10.0.0.0/24 to any port 12345 proto tcp comment 'Alloy UI/metrics'
+sudo ufw allow from 10.1.0.0/24 to any port 12345 proto tcp comment 'Alloy UI/metrics'
 ```
 
-`promtail_sent_entries_total` increasing means lines are reaching Loki.
+Start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now alloy
+sudo systemctl status alloy
+```
+
+Open the UI:
+
+```text
+http://10.0.0.4:12345
+```
+
+The **Graph** page shows every component and the connections between them. A
+component with a red health state names the exact error — this replaces most of
+the guesswork that Promtail required.
+
+After editing the configuration, reload without restarting:
+
+```bash
+sudo systemctl reload alloy
+```
 
 ---
 
-# 19. Verify End to End
+# 20. Verify End to End
 
 Generate an audit event on the PostgreSQL leader:
 
@@ -849,6 +1013,15 @@ Confirm it reached the local log:
 sudo grep AUDIT /var/log/postgresql/postgresql-*.json | tail -3
 ```
 
+Confirm Alloy is sending:
+
+```bash
+curl -s http://localhost:12345/metrics | grep -E 'loki_write_(sent|dropped)_entries_total'
+```
+
+`loki_write_sent_entries_total` increasing means lines are reaching Loki.
+`loki_write_dropped_entries_total` should stay at zero.
+
 Query Loki directly from the Monitoring Server:
 
 ```bash
@@ -863,13 +1036,13 @@ Then in Grafana:
 Explore → Loki → {job="postgresql", audit_class="DDL"}
 ```
 
-You should see the `CREATE TABLE` and `DROP TABLE` entries with `audit_type`,
-`audit_class` as labels, and `db_user`, `audit_object_name` in structured
+You should see the `CREATE TABLE` and `DROP TABLE` entries with `audit_type`
+and `audit_class` as labels, and `db_user` and `audit_object_name` in structured
 metadata.
 
 ---
 
-# 20. Label Cardinality — The Rule That Matters
+# 21. Label Cardinality — The Rule That Matters
 
 Loki builds one **stream** per unique combination of label values. Too many
 streams and Loki slows down, then starts rejecting writes.
@@ -900,13 +1073,14 @@ loki_ingester_streams_created_total
 sum(rate(loki_distributor_bytes_received_total[5m]))
 ```
 
-> **If someone adds `db_user` or `audit_object_name` as a label**, stream count
-> jumps by orders of magnitude and Loki degrades within hours. Review this
-> before any pipeline change.
+> **If someone moves `db_user` or `audit_object_name` from
+> `stage.structured_metadata` into `stage.labels`**, stream count jumps by
+> orders of magnitude and Loki degrades within hours. Review this before any
+> pipeline change.
 
 ---
 
-# 21. LogQL for the Audit Trail
+# 22. LogQL for the Audit Trail
 
 This is what the whole setup is for. These are the queries to hand the client.
 
@@ -981,7 +1155,7 @@ sum by (node) (
 {job="postgresql", error_severity=~"ERROR|FATAL|PANIC"}
 ```
 
-## Audit event rate by command type
+## Audit event rate by class
 
 ```logql
 sum by (audit_class) (
@@ -1018,7 +1192,7 @@ PostgreSQL, etcd, system. This is the query to run during an incident.
 
 ---
 
-# 22. Alerting on Logs
+# 23. Alerting on Logs
 
 Loki's ruler evaluates LogQL rules and sends to the same Alertmanager already
 configured, so log alerts route exactly like metric alerts.
@@ -1115,7 +1289,7 @@ maintenance-window exclusion rather than removing them.
 
 ---
 
-# 23. Retention and Sizing
+# 24. Retention and Sizing
 
 Estimate before promising the client a disk size. Measure on the demo cluster:
 
@@ -1157,80 +1331,111 @@ limits_config:
 
 ---
 
-# 24. Promtail's Status — Read This Before Standardising On It
+# 25. Converting an Existing Promtail Configuration
 
-Grafana has frozen Promtail's features and designated **Grafana Alloy** as its
-successor. Promtail still works and is still widely deployed, but it is no longer
-receiving new features, and it will eventually stop receiving fixes.
+If a node already runs Promtail, Alloy converts the configuration mechanically:
 
-For this project that is a manageable risk:
-
-```text
-* The configuration above is stable and does what is needed today.
-* Alloy reads Promtail configuration through a converter, so migration is
-  mechanical rather than a rewrite:
-
-      alloy convert --source-format=promtail \
-                    --output=/etc/alloy/config.alloy \
-                    /etc/promtail/promtail-config.yml
-
-* Loki itself is unaffected — only the shipper changes.
+```bash
+sudo alloy convert \
+  --source-format=promtail \
+  --output=/etc/alloy/config.alloy \
+  --report=/tmp/alloy-convert-report.txt \
+  /etc/promtail/promtail-config.yml
 ```
 
-**Raise it with the client rather than letting them find out later.** If they
-want the longer-lived option from day one, deploy Alloy instead and use the
-converter output as the starting point. The Loki side of this document does not
-change either way.
+Read the report before trusting the output:
+
+```bash
+cat /tmp/alloy-convert-report.txt
+```
+
+Then check what actually needs attention:
+
+```text
+* Regex backslashes. YAML passed \d through literally; Alloy string escapes
+  need \\d. The converter handles this, but verify any regex you later edit
+  by hand — this is the most common breakage.
+
+* Component names. The converter generates names from the job names. Rename
+  them to something readable before committing the file.
+
+* Positions file. Promtail's positions.yaml is not carried over. Alloy tracks
+  its own positions under /var/lib/alloy/data, so the first run re-reads from
+  the start of each file unless you set tail_from_end.
+```
+
+Format and check the result, then decommission Promtail:
+
+```bash
+sudo alloy fmt /etc/alloy/config.alloy
+
+sudo systemctl disable --now promtail
+sudo systemctl daemon-reload
+sudo systemctl enable --now alloy
+```
+
+Confirm nothing is running twice — duplicated lines in Loki mean both agents are
+still shipping:
+
+```bash
+systemctl is-active promtail alloy
+```
 
 ---
 
-# 25. Troubleshooting
+# 26. Troubleshooting
 
-## Promtail runs but nothing appears in Loki
+## Alloy runs but nothing appears in Loki
 
-Almost always permissions. Check as the promtail user, not as root:
+Almost always permissions. Check as the alloy user, not as root:
 
 ```bash
-sudo -u promtail cat /var/log/postgresql/postgresql-*.json | head -1
+sudo -u alloy cat /var/log/postgresql/postgresql-*.json | head -1
 ```
 
-`Permission denied` means section 15 was skipped or `log_file_mode` is still
+`Permission denied` means section 16 was skipped or `log_file_mode` is still
 `0600`.
 
-## Check what Promtail thinks it is doing
+## Use the UI first
+
+```text
+http://<node>:12345  →  Graph
+```
+
+Every component shows a health state and its last error. Click a component to
+see the arguments it resolved and the data it is passing on. This finds most
+problems in seconds.
+
+## Check the shipping counters
 
 ```bash
-sudo journalctl -u promtail -f
-curl -s http://localhost:9080/metrics | grep -E 'promtail_(sent|dropped|read)'
+sudo journalctl -u alloy -f
+curl -s http://localhost:12345/metrics | grep -E 'loki_(write|source_file)'
 ```
 
 ```text
-promtail_read_bytes_total       it is reading the files
-promtail_sent_entries_total     it is reaching Loki
-promtail_dropped_entries_total  should stay at zero
+loki_write_sent_entries_total       it is reaching Loki
+loki_write_dropped_entries_total    should stay at zero
+loki_source_file_file_bytes_total   it is reading the files
 ```
 
-## Test a pipeline without shipping anything
+## Configuration will not parse
 
 ```bash
-promtail -config.file=/etc/promtail/promtail-config.yml -dry-run -inspect
+sudo alloy fmt /etc/alloy/config.alloy
 ```
 
-`-inspect` prints every extracted field at each stage. This is the fastest way to
-debug the pgAudit regex.
+Reports the exact line and column. The usual causes are a single backslash in a
+regex that needs doubling, or an unescaped `"` inside a `stage.match` selector.
 
 ## "entry out of order" or "too far behind"
 
-The node clock is wrong, or `timestamp` parsing failed and Promtail fell back to
-read time. Check the format string in section 16 matches what PostgreSQL emits:
+The node clock is wrong, or `stage.timestamp` failed and Alloy fell back to read
+time. Check the format string in section 17 matches what PostgreSQL emits:
 
 ```bash
 sudo head -1 /var/log/postgresql/postgresql-*.json | jq -r .timestamp
 ```
-
-## Journal scraping fails with "journal reading is not supported"
-
-The binary was built without journal support — see the note in section 14.
 
 ## Loki rejects writes
 
@@ -1239,19 +1444,28 @@ sudo journalctl -u loki | grep -i "rate limit\|too many streams"
 ```
 
 Rate limit → raise `ingestion_rate_mb`. Too many streams → a high-cardinality
-label crept into a pipeline. Re-read section 20.
+label crept into a pipeline. Re-read section 21.
 
-## Positions reset and everything re-ships
+## Structured metadata rejected
 
-`/var/lib/promtail/positions.yaml` was deleted or is not writable:
+```text
+"structured metadata is disabled"
+```
+
+`allow_structured_metadata: true` is missing from `limits_config` in the Loki
+configuration. See section 6.
+
+## Everything re-ships after a restart
+
+Alloy's state directory was wiped or is not writable:
 
 ```bash
-ls -l /var/lib/promtail/positions.yaml
+ls -ld /var/lib/alloy/data
 ```
 
 ---
 
-# 26. Log Flow Summary
+# 27. Log Flow Summary
 
 ```text
 PostgreSQL (pgAudit)
@@ -1260,13 +1474,15 @@ PostgreSQL (pgAudit)
         ▼
 /var/log/postgresql/*.json          0640 postgres:postgres
         │
-        │ read by promtail (member of the postgres group)
+        │ read by alloy (member of the postgres group)
         ▼
-Promtail pipeline
-        │  json  →  timestamp  →  labels  →  structured_metadata
-        │  regex on "AUDIT: ..."  →  audit_type / audit_class
+Grafana Alloy
+        │  local.file_match  →  loki.source.file  →  loki.process
+        │  stage.json → stage.timestamp → stage.labels
+        │  stage.structured_metadata
+        │  stage.regex on "AUDIT: ..."  →  audit_type / audit_class
         ▼
-HTTP push :3100
+loki.write  →  HTTP push :3100
         ▼
 Loki  (Monitoring Server 10.0.0.20)
         │
@@ -1276,7 +1492,7 @@ Loki  (Monitoring Server 10.0.0.20)
 
 ---
 
-# 27. Installation Checklist
+# 28. Installation Checklist
 
 ```text
 Loki — Monitoring Server
@@ -1284,6 +1500,7 @@ Loki — Monitoring Server
 * [ ] Binary installed, `loki --version` works
 * [ ] /etc/loki/loki-config.yml in place, owned by loki, mode 640
 * [ ] compactor.retention_enabled is TRUE (not just retention_period)
+* [ ] allow_structured_metadata is true
 * [ ] Service enabled and running, /ready returns "ready"
 * [ ] Firewall allows 3100 from 10.0.0.0/24 and 10.1.0.0/24
 * [ ] Prometheus scrapes the loki job
@@ -1295,22 +1512,26 @@ PostgreSQL preparation
 * [ ] /var/log/postgresql is 750, existing files are 640
 * [ ] logrotate create mode updated to 0640
 
-Promtail — every node
-* [ ] promtail user created and added to systemd-journal, adm, postgres
-* [ ] Binary installed, same version as Loki
-* [ ] Journal support confirmed, or journal blocks removed
-* [ ] Config in place with correct site / node / instance labels
-* [ ] SupplementaryGroups matches the node type (no postgres on non-DB nodes)
-* [ ] Service running, promtail_sent_entries_total increasing
-* [ ] `sudo -u promtail cat` on a PostgreSQL log succeeds
+Alloy — every node
+* [ ] Grafana APT repository added
+* [ ] alloy package installed, `alloy --version` works
+* [ ] alloy user added to systemd-journal, adm, and postgres (DB nodes only)
+* [ ] /etc/alloy/config.alloy written with correct site / node / instance labels
+* [ ] `alloy fmt` parses the file with no error
+* [ ] /etc/default/alloy sets the listen address
+* [ ] Firewall allows 12345 from the platform subnets
+* [ ] Service running, loki_write_sent_entries_total increasing
+* [ ] `sudo -u alloy cat` on a PostgreSQL log succeeds
+* [ ] Alloy UI Graph page shows all components healthy
+* [ ] Prometheus scrapes the alloy jobs
 
 End to end
 * [ ] Test CREATE/INSERT/DROP appears in Loki with audit_class="DDL"
 * [ ] db_user and audit_object_name present as structured metadata
-* [ ] No unbounded field was added as a label
+* [ ] No unbounded field was added to stage.labels
 * [ ] Ruler rules loaded, visible at /loki/api/v1/rules
 * [ ] A test alert reached Alertmanager
 * [ ] Ingest volume measured and retention sized against it
 * [ ] Retention period confirmed in writing by the client
-* [ ] Promtail-vs-Alloy decision raised with the client
+* [ ] No node is still running Promtail alongside Alloy
 ```
