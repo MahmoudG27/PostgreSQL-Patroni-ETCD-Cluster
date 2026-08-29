@@ -78,3 +78,15 @@ echo "pgbackrest_last_backup_timestamp $(date +%s)" >> /var/lib/node_exporter/te
 
 2. Enable this feature in the node_exporter of the Backup VM only (flag --collector.textfile.directory)
 # Note: This is not a new, separate exporter - it is an additional use of the same node_exporter that already exists on the Backup VM.
+
+postgres=# CREATE ROLE app_user    LOGIN PASSWORD 'APPUSER_PASSWORD' IN ROLE app_rw;
+CREATE ROLE
+postgres=# CREATE ROLE report_user LOGIN PASSWORD 'REPORTUSER_PASSWORD' IN ROLE app_ro;
+CREATE ROLE
+postgres=# CREATE ROLE monitoring LOGIN PASSWORD 'MONITORING_PASSWORD';
+
+
+PATRONI_PASSWORD
+
+
+DATA_SOURCE_NAME="postgresql://postgres_exporter:CHANGE_ME@10.0.0.4:5432/postgres?sslmode=require"

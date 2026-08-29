@@ -165,7 +165,8 @@ frontend postgres_write
 backend postgres_primary
     mode tcp
 
-    option httpchk GET /primary
+    option httpchk
+    http-check send meth GET uri /primary hdr Authorization "Basic cGF0cm9uaTpQQVRST05JX1BBU1NXT1JE"
     http-check expect status 200
 
     server hq-node-01 10.0.0.4:5432 check port 8008
@@ -181,7 +182,8 @@ backend postgres_replicas
 
     balance roundrobin
 
-    option httpchk GET /replica
+    option httpchk
+    http-check send meth GET uri /replica hdr Authorization "Basic cGF0cm9uaTpQQVRST05JX1BBU1NXT1JE"
     http-check expect status 200
 
     server hq-node-01 10.0.0.4:5432 check port 8008
@@ -193,7 +195,6 @@ frontend stats
     mode http
     stats enable
     stats uri /stats
-    stats refresh 10s
     stats refresh 10s
     stats show-legends
 EOF
