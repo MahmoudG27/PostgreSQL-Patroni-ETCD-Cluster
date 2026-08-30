@@ -86,9 +86,6 @@ scrape_configs:
 
   - job_name: "patroni_hq"
     metrics_path: /metrics
-    basic_auth:
-      username: 'patroni'
-      password: 'PATRONI_PASSWORD'
     static_configs:
       - targets: ["10.0.0.4:8008", "10.0.0.5:8008", "10.0.0.6:8008"]
         labels:
@@ -96,9 +93,6 @@ scrape_configs:
 
   - job_name: "patroni_dr"
     metrics_path: /metrics
-    basic_auth:
-      username: 'patroni'
-      password: 'PATRONI_PASSWORD'
     static_configs:
       - targets: ["10.1.0.4:8008", "10.1.0.5:8008", "10.1.0.6:8008"]
         labels:

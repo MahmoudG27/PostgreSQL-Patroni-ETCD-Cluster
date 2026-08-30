@@ -166,7 +166,7 @@ backend postgres_primary
     mode tcp
 
     option httpchk
-    http-check send meth GET uri /primary hdr Authorization "Basic cGF0cm9uaTpQQVRST05JX1BBU1NXT1JE"
+    http-check send meth GET uri /primary
     http-check expect status 200
 
     server hq-node-01 10.1.0.4:5432 check port 8008
@@ -183,7 +183,7 @@ backend postgres_replicas
     balance roundrobin
 
     option httpchk
-    http-check send meth GET uri /replica hdr Authorization "Basic cGF0cm9uaTpQQVRST05JX1BBU1NXT1JE"
+    http-check send meth GET uri /replica
     http-check expect status 200
 
     server hq-node-01 10.1.0.4:5432 check port 8008
